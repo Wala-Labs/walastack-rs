@@ -1,0 +1,23 @@
+[package]
+name        = "walastack-cli"
+description = "WalaStack command-line interface — project scaffolding, dev server, build, and deploy."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+documentation.workspace = true
+authors.workspace      = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "walastack"
+path = "src/main.rs"
+
+[dependencies]

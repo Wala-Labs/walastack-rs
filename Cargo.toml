@@ -1,0 +1,97 @@
+[workspace]
+resolver = "3"
+members  = [
+  "crates/walastack",
+  "crates/walastack-cli",
+  "crates/walastack-runtime",
+  "crates/walastack-http",
+  "crates/walastack-router",
+  "crates/walastack-service",
+  "crates/walastack-web",
+  "crates/walastack-macros",
+  "crates/walastack-test",
+  "examples/hello-world",
+  "xtask",
+]
+
+[workspace.package]
+version       = "0.1.0"
+edition       = "2024"
+rust-version  = "1.85"
+license       = "MIT OR Apache-2.0"
+repository    = "https://github.com/Wala-Labs/walastack-rs"
+homepage      = "https://walastack.com"
+documentation = "https://docs.rs/walastack"
+authors       = ["Wala Labs <contact@walalabs.tech>"]
+readme        = "README.md"
+keywords      = ["web", "framework", "ai", "infrastructure", "resilience"]
+categories    = ["web-programming", "asynchronous"]
+
+[workspace.dependencies]
+# Async runtime + HTTP foundation
+tokio          = { version = "1", features = ["full"] }
+hyper          = { version = "1.6", features = ["full"] }
+hyper-util     = { version = "0.1", features = ["full"] }
+tower          = { version = "0.5", features = ["full"] }
+tower-http     = { version = "0.6", features = ["full"] }
+http           = "1"
+http-body      = "1"
+http-body-util = "0.1"
+bytes          = "1"
+
+# Serialization + errors
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror  = "2"
+anyhow     = "1"
+
+# Observability
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Async utilities
+futures = "0.3"
+
+# Routing
+matchit = "0.8"
+
+# Dev / test
+tokio-test = "0.4"
+
+# Internal crates (path deps inside the workspace)
+walastack-runtime = { path = "crates/walastack-runtime", version = "0.1.0" }
+walastack-http    = { path = "crates/walastack-http",    version = "0.1.0" }
+walastack-service = { path = "crates/walastack-service", version = "0.1.0" }
+walastack-router  = { path = "crates/walastack-router",  version = "0.1.0" }
+walastack-macros  = { path = "crates/walastack-macros",  version = "0.1.0" }
+walastack-web     = { path = "crates/walastack-web",     version = "0.1.0" }
+walastack-test    = { path = "crates/walastack-test",    version = "0.1.0" }
+
+[workspace.lints.rust]
+unsafe_code                   = "forbid"
+missing_debug_implementations = "warn"
+rust_2018_idioms              = { level = "warn", priority = -1 }
+unreachable_pub               = "warn"
+
+[workspace.lints.clippy]
+pedantic     = { level = "warn", priority = -1 }
+nursery      = { level = "warn", priority = -1 }
+unwrap_used  = "warn"
+expect_used  = "warn"
+todo         = "warn"
+dbg_macro    = "warn"
+print_stdout = "warn"
+
+[profile.dev]
+opt-level = 0
+debug     = true
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+strip         = "symbols"
+
+[profile.bench]
+inherits = "release"
+debug    = true

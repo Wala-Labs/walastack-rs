@@ -1,0 +1,11 @@
+# nextest configuration — https://nexte.st/docs/configuration/
+
+[profile.default]
+# Show failure output immediately rather than buffering until the end.
+failure-output = "immediate"
+status-level = "pass"
+
+[profile.ci]
+# CI inherits default but bumps retries to handle flaky network-dependent tests.
+retries = 2
+fail-fast = false

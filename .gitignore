@@ -1,0 +1,30 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Editor / IDE
+/.idea
+/.vscode/*
+!/.vscode/extensions.json
+!/.vscode/settings.json
+/.zed
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Coverage / profiling
+/coverage
+*.profraw
+
+# xtask cache
+/.xtask-cache

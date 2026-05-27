@@ -1,0 +1,19 @@
+[package]
+name        = "walastack"
+description = "WalaStack umbrella crate — re-exports the primary user-facing framework API and prelude."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+documentation.workspace = true
+authors.workspace      = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lints]
+workspace = true
+
+[dependencies]

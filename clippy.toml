@@ -1,0 +1,10 @@
+# Brand names and ecosystem identifiers that are NOT Rust code identifiers
+# and therefore should not trigger `clippy::doc_markdown` (which flags
+# CamelCase words in doc comments as likely-API references).
+#
+# The trailing ".." preserves clippy's default list (HTTP, API, JSON, etc.).
+doc-valid-idents = [
+    "WalaStack",
+    "WalaLabs",
+    "..",
+]
