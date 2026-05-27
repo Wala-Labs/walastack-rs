@@ -31,7 +31,7 @@ walastack-rs/
 │   ├── walastack-http        # HTTP types & body abstractions
 │   ├── walastack-router      # Route matching
 │   ├── walastack-service     # Service / middleware abstractions (Tower)
-│   ├── walastack-web         # Primary user-facing web framework
+│   ├── walastack-app         # User-facing application framework primitive
 │   ├── walastack-macros      # Procedural macros
 │   └── walastack-test        # Testing utilities
 ├── examples/

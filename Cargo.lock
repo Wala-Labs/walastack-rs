@@ -11,6 +11,10 @@ name = "walastack"
 version = "0.1.0"
 
 [[package]]
+name = "walastack-app"
+version = "0.1.0"
+
+[[package]]
 name = "walastack-cli"
 version = "0.1.0"
 
@@ -36,10 +40,6 @@ version = "0.1.0"
 
 [[package]]
 name = "walastack-test"
-version = "0.1.0"
-
-[[package]]
-name = "walastack-web"
 version = "0.1.0"
 
 [[package]]

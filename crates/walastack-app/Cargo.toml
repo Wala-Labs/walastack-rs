@@ -1,6 +1,6 @@
 [package]
-name        = "walastack-web"
-description = "Primary user-facing Rust web framework for WalaStack."
+name        = "walastack-app"
+description = "User-facing application framework primitive for WalaStack — App, routing, extractors, responders."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
