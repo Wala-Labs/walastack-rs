@@ -29,3 +29,10 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # dtolnay/rust-toolchain uses Rust toolchain versions as tags,
+      # not action versions. We pin to the workspace MSRV (see
+      # rust-toolchain.toml) deliberately. Toolchain bumps should
+      # happen via a coordinated PR that also updates the workspace
+      # MSRV and `rust-toolchain.toml`, not a Dependabot bump.
+      - dependency-name: dtolnay/rust-toolchain
