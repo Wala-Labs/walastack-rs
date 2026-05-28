@@ -6,7 +6,7 @@
 //! - `#[walastack::main]` — wraps an async `main` function in a Tokio
 //!   multi-threaded runtime plus tracing initialization.
 //! - `#[get("/")]`, `#[post("/")]`, `#[put("/")]`, `#[delete("/")]` — route
-//!   attribute macros that register the decorated handler on an [`App`].
+//!   attribute macros that register the decorated handler on an `App`.
 //!
 //! The macros generate code that references `::walastack` and
 //! `::walastack::__macro_support::*`, so the user only needs `walastack` in
