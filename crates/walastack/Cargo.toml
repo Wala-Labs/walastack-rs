@@ -17,3 +17,9 @@ categories.workspace   = true
 workspace = true
 
 [dependencies]
+tokio             = { workspace = true }
+walastack-app     = { workspace = true }
+walastack-http    = { workspace = true }
+walastack-macros  = { workspace = true }
+walastack-router  = { workspace = true }
+walastack-runtime = { workspace = true }

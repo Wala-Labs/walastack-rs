@@ -17,3 +17,10 @@ categories.workspace   = true
 workspace = true
 
 [dependencies]
+http           = { workspace = true }
+matchit        = { workspace = true }
+walastack-http = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }
+tokio = { workspace = true }

@@ -40,10 +40,11 @@ http-body-util = "0.1"
 bytes          = "1"
 
 # Serialization + errors
-serde      = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror  = "2"
-anyhow     = "1"
+serde            = { version = "1", features = ["derive"] }
+serde_json       = "1"
+serde_urlencoded = "0.7"
+thiserror        = "2"
+anyhow           = "1"
 
 # Observability
 tracing            = "0.1"
@@ -55,17 +56,21 @@ futures = "0.3"
 # Routing
 matchit = "0.8"
 
+# CLI
+clap = { version = "4", features = ["derive"] }
+
 # Dev / test
 tokio-test = "0.4"
 
 # Internal crates (path deps inside the workspace)
-walastack-runtime = { path = "crates/walastack-runtime", version = "0.1.0" }
-walastack-http    = { path = "crates/walastack-http",    version = "0.1.0" }
-walastack-service = { path = "crates/walastack-service", version = "0.1.0" }
-walastack-router  = { path = "crates/walastack-router",  version = "0.1.0" }
-walastack-macros  = { path = "crates/walastack-macros",  version = "0.1.0" }
-walastack-app     = { path = "crates/walastack-app",     version = "0.1.0" }
-walastack-test    = { path = "crates/walastack-test",    version = "0.1.0" }
+walastack          = { path = "crates/walastack",          version = "0.1.0" }
+walastack-runtime  = { path = "crates/walastack-runtime",  version = "0.1.0" }
+walastack-http     = { path = "crates/walastack-http",     version = "0.1.0" }
+walastack-service  = { path = "crates/walastack-service",  version = "0.1.0" }
+walastack-router   = { path = "crates/walastack-router",   version = "0.1.0" }
+walastack-macros   = { path = "crates/walastack-macros",   version = "0.1.0" }
+walastack-app      = { path = "crates/walastack-app",      version = "0.1.0" }
+walastack-test     = { path = "crates/walastack-test",     version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_code                   = "forbid"

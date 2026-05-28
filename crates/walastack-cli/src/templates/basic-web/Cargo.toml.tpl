@@ -1,0 +1,8 @@
+[package]
+name         = "{{name}}"
+version      = "0.0.1"
+edition      = "2024"
+rust-version = "1.85"
+
+[dependencies]
+walastack = "0.1.0"
