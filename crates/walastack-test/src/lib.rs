@@ -28,64 +28,102 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use http::{Method, StatusCode};
-use walastack_app::App;
+use http::{HeaderName, HeaderValue, Method, StatusCode};
+use walastack_app::{App, dispatch_request};
 use walastack_http::{Body, Response};
 use walastack_router::Router;
+use walastack_runtime::{Runtime, RuntimeContext};
 
 /// In-memory test client for a WalaStack application.
 ///
 /// Constructed from an [`App`]; dispatches requests directly through the
 /// router. Returns the [`Response`] the handler produced, or a 404 if no
 /// handler matched.
+///
+/// By default the client uses an empty `Runtime` so handlers that don't
+/// touch the kernel work unchanged. To test handlers that depend on
+/// kernel state (Auth, Jobs dashboards, Forms, MCP, future ecosystem
+/// extractors), construct a populated [`Runtime`] and pass it via
+/// [`TestClient::with_runtime`].
 pub struct TestClient {
     router: Arc<Router>,
+    runtime: RuntimeContext,
 }
 
 impl TestClient {
-    /// Create a test client by consuming `app`.
+    /// Create a test client by consuming `app` and binding it to an
+    /// empty `Runtime`. Use [`TestClient::with_runtime`] to attach a
+    /// configured kernel.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `Runtime::builder().build()` fails. With no plugins
+    /// registered the builder cannot have unmet capability requirements,
+    /// so this path is effectively infallible.
     #[must_use]
     pub fn new(app: App) -> Self {
+        let runtime = match Runtime::builder().build() {
+            Ok(rt) => rt,
+            Err(e) => panic!("empty Runtime should always build: {e}"),
+        };
         Self {
             router: Arc::new(app.into_router()),
+            runtime: runtime.context().clone(),
+        }
+    }
+
+    /// Attach a pre-built `Runtime` so handlers can resolve
+    /// capabilities and resources through the `RuntimeContext` extension
+    /// that `HttpService` injects in production.
+    #[must_use]
+    pub fn with_runtime(app: App, runtime: &Runtime) -> Self {
+        Self {
+            router: Arc::new(app.into_router()),
+            runtime: runtime.context().clone(),
         }
     }
 
     /// Dispatch a `GET` request to `path`.
     pub async fn get(&self, path: &str) -> Response {
-        self.dispatch(Method::GET, path).await
+        self.dispatch(Method::GET, path, &[]).await
+    }
+
+    /// Dispatch a `GET` request with custom headers.
+    pub async fn get_with_headers(&self, path: &str, headers: &[(&str, &str)]) -> Response {
+        self.dispatch(Method::GET, path, headers).await
     }
 
     /// Dispatch a `POST` request to `path`.
     pub async fn post(&self, path: &str) -> Response {
-        self.dispatch(Method::POST, path).await
+        self.dispatch(Method::POST, path, &[]).await
     }
 
     /// Dispatch a `PUT` request to `path`.
     pub async fn put(&self, path: &str) -> Response {
-        self.dispatch(Method::PUT, path).await
+        self.dispatch(Method::PUT, path, &[]).await
     }
 
     /// Dispatch a `DELETE` request to `path`.
     pub async fn delete(&self, path: &str) -> Response {
-        self.dispatch(Method::DELETE, path).await
+        self.dispatch(Method::DELETE, path, &[]).await
     }
 
-    async fn dispatch(&self, method: Method, path: &str) -> Response {
-        let Ok(mut request) = http::Request::builder()
-            .method(method.clone())
-            .uri(path)
-            .body(Body::new(Bytes::new()))
-        else {
+    async fn dispatch(&self, method: Method, path: &str, headers: &[(&str, &str)]) -> Response {
+        let mut builder = http::Request::builder().method(method).uri(path);
+        for (name, value) in headers {
+            let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
+                return bad_request();
+            };
+            let Ok(header_value) = HeaderValue::from_str(value) else {
+                return bad_request();
+            };
+            builder = builder.header(header_name, header_value);
+        }
+        let Ok(request) = builder.body(Body::new(Bytes::new())) else {
             return bad_request();
         };
 
-        if let Some((handler, path_params)) = self.router.dispatch(&method, path) {
-            request.extensions_mut().insert(path_params);
-            handler(request).await
-        } else {
-            not_found()
-        }
+        dispatch_request(&self.router, &self.runtime, request).await
     }
 }
 
@@ -93,14 +131,8 @@ impl std::fmt::Debug for TestClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TestClient")
             .field("router", &self.router)
-            .finish()
+            .finish_non_exhaustive()
     }
-}
-
-fn not_found() -> Response {
-    let mut response = Response::new(Body::new(Bytes::from_static(b"Not Found")));
-    *response.status_mut() = StatusCode::NOT_FOUND;
-    response
 }
 
 fn bad_request() -> Response {

@@ -17,11 +17,12 @@ categories.workspace   = true
 workspace = true
 
 [dependencies]
-bytes            = { workspace = true }
-http             = { workspace = true }
-walastack-app    = { workspace = true }
-walastack-http   = { workspace = true }
-walastack-router = { workspace = true }
+bytes             = { workspace = true }
+http              = { workspace = true }
+walastack-app     = { workspace = true }
+walastack-http    = { workspace = true }
+walastack-router  = { workspace = true }
+walastack-runtime = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

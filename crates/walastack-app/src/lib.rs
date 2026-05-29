@@ -55,7 +55,8 @@ use walastack_http::{
 };
 use walastack_router::{BoxedHandler, Router};
 use walastack_runtime::{
-    BoxedServiceFuture, Runtime, Service, ServiceContext, ServiceError, ShutdownSignal,
+    BoxedServiceFuture, Runtime, RuntimeContext, Service, ServiceContext, ServiceError,
+    ShutdownSignal,
 };
 
 /// Trait for types that register themselves as routes on an [`App`].
@@ -418,10 +419,11 @@ impl std::fmt::Debug for App {
     }
 }
 
-async fn serve_request(router: &Router, req: hyper::Request<Incoming>) -> Response {
-    let method = req.method().clone();
-    let path = req.uri().path().to_string();
-
+async fn serve_request(
+    router: &Router,
+    runtime: &RuntimeContext,
+    req: hyper::Request<Incoming>,
+) -> Response {
     let (parts, body) = req.into_parts();
     let body_bytes = match body.collect().await {
         Ok(collected) => collected.to_bytes(),
@@ -431,11 +433,33 @@ async fn serve_request(router: &Router, req: hyper::Request<Incoming>) -> Respon
         }
     };
     let walastack_body = Body::new(body_bytes);
-    let mut walastack_req = Request::from_parts(parts, walastack_body);
+    let walastack_req = Request::from_parts(parts, walastack_body);
+
+    dispatch_request(router, runtime, walastack_req).await
+}
+
+/// Dispatch a fully-decoded request through the router, injecting the
+/// `RuntimeContext` extension so extractors (Auth, Jobs dashboards,
+/// Forms, MCP, Agent endpoints, future ecosystem extractors) can reach
+/// kernel capabilities and resources without coupling to HttpService
+/// internals.
+///
+/// Exposed at crate visibility so `walastack-test::TestClient` can
+/// drive the same dispatch path during tests.
+#[doc(hidden)]
+pub async fn dispatch_request(
+    router: &Router,
+    runtime: &RuntimeContext,
+    mut req: Request,
+) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+
+    req.extensions_mut().insert(runtime.clone());
 
     if let Some((handler, path_params)) = router.dispatch(&method, &path) {
-        walastack_req.extensions_mut().insert(path_params);
-        handler(walastack_req).await
+        req.extensions_mut().insert(path_params);
+        handler(req).await
     } else {
         not_found()
     }
@@ -517,11 +541,12 @@ impl Service for HttpService {
     ) -> BoxedServiceFuture<core::result::Result<JoinHandle<()>, ServiceError>> {
         let addr = self.addr;
         let router = Arc::clone(&self.router);
+        let runtime = ctx.runtime().clone();
         Box::pin(async move {
             let listener = TcpListener::bind(addr).await.map_err(ServiceError::from)?;
             tracing::info!(%addr, "walastack listening");
             let shutdown = ctx.shutdown_signal();
-            let handle = tokio::spawn(accept_loop(listener, router, shutdown));
+            let handle = tokio::spawn(accept_loop(listener, router, runtime, shutdown));
             Ok(handle)
         })
     }
@@ -535,7 +560,12 @@ impl std::fmt::Debug for HttpService {
     }
 }
 
-async fn accept_loop(listener: TcpListener, router: Arc<Router>, mut shutdown: ShutdownSignal) {
+async fn accept_loop(
+    listener: TcpListener,
+    router: Arc<Router>,
+    runtime: RuntimeContext,
+    mut shutdown: ShutdownSignal,
+) {
     loop {
         tokio::select! {
             () = shutdown.wait() => {
@@ -546,12 +576,14 @@ async fn accept_loop(listener: TcpListener, router: Arc<Router>, mut shutdown: S
                 match accept_result {
                     Ok((stream, peer_addr)) => {
                         let router = Arc::clone(&router);
+                        let runtime = runtime.clone();
                         tokio::spawn(async move {
                             let io = TokioIo::new(stream);
                             let service = service_fn(move |req: hyper::Request<Incoming>| {
                                 let router = Arc::clone(&router);
+                                let runtime = runtime.clone();
                                 async move {
-                                    let response = serve_request(&router, req).await;
+                                    let response = serve_request(&router, &runtime, req).await;
                                     Ok::<_, std::convert::Infallible>(response)
                                 }
                             });
@@ -568,5 +600,89 @@ async fn accept_loop(listener: TcpListener, router: Arc<Router>, mut shutdown: S
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::{App, Request, Response, dispatch_request};
+    use bytes::Bytes;
+    use http::StatusCode;
+    use walastack_http::{Body, FromRequestParts, IntoResponse};
+    use walastack_runtime::{Runtime, RuntimeContext};
+
+    // A handler that succeeds iff the request carries a `RuntimeContext`
+    // extension. Used to assert the platform integration point.
+    struct RuntimeContextProbe;
+
+    impl FromRequestParts for RuntimeContextProbe {
+        type Rejection = MissingRuntimeContext;
+
+        fn from_request_parts(
+            parts: &mut http::request::Parts,
+        ) -> impl std::future::Future<Output = std::result::Result<Self, Self::Rejection>> + Send
+        {
+            let found = parts.extensions.get::<RuntimeContext>().is_some();
+            async move {
+                if found {
+                    Ok(Self)
+                } else {
+                    Err(MissingRuntimeContext)
+                }
+            }
+        }
+    }
+
+    struct MissingRuntimeContext;
+
+    impl IntoResponse for MissingRuntimeContext {
+        fn into_response(self) -> Response {
+            let mut response = Response::new(Body::new(Bytes::from_static(b"no runtime context")));
+            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            response
+        }
+    }
+
+    async fn probe(_probe: RuntimeContextProbe) -> &'static str {
+        "ok"
+    }
+
+    fn request(method: http::Method, path: &str) -> Request {
+        http::Request::builder()
+            .method(method)
+            .uri(path)
+            .body(Body::new(Bytes::new()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn dispatch_request_injects_runtime_context_into_extensions() {
+        let app = App::new().get("/probe", probe);
+        let router = app.into_router();
+        let runtime = Runtime::builder().build().unwrap();
+
+        let response = dispatch_request(
+            &router,
+            runtime.context(),
+            request(http::Method::GET, "/probe"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn dispatch_request_routes_to_404_on_unknown_path() {
+        let runtime = Runtime::builder().build().unwrap();
+        let router = App::new().into_router();
+
+        let response = dispatch_request(
+            &router,
+            runtime.context(),
+            request(http::Method::GET, "/missing"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

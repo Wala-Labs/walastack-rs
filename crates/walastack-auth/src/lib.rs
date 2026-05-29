@@ -1,6 +1,6 @@
 //! Authentication primitives for the WalaStack Runtime Kernel.
 //!
-//! ## What this crate ships (Iteration 1)
+//! ## What this crate ships
 //!
 //! - [`SecretsProvider`] capability — secrets-by-name surface that
 //!   composes with future `walastack-mcp` credential management,
@@ -11,7 +11,8 @@
 //!   providers ship as separate plugins later.
 //! - [`JwtCodec`] — HS256 JWT encode/decode helper backed by a
 //!   `SecretsProvider`. Construct via [`JwtCodec::from_runtime`] after
-//!   the kernel is built.
+//!   the kernel is built, or rely on the [`Auth`] extractor to
+//!   construct one per request.
 //! - [`Claims`] — standard JWT claims (`sub` / `iss` / `aud` / `exp` /
 //!   `iat`) plus a `roles` field. Custom claims types are supported via
 //!   `JwtCodec`'s generic encode/decode.
@@ -20,14 +21,16 @@
 //!   follow-up plugins.
 //! - [`AuthPlugin`] — declares a `CapabilityRequirement::any::<dyn
 //!   SecretsProvider>()` so any deployment missing a secrets provider
-//!   fails fast at `Runtime::builder().build()`.
+//!   fails fast at `Runtime::builder().build()`. Use
+//!   [`AuthPlugin::with_jwt`] to register [`JwtSettings`] for the
+//!   [`Auth`] extractor.
+//! - [`Auth`] extractor — implements `FromRequestParts`; resolves the
+//!   `Bearer <token>` header against the registered settings + secrets
+//!   and yields [`Claims`] to the handler. [`AuthRejection`] maps
+//!   failures to `401` (client error) or `500` (server misconfig).
 //!
-//! ## What this crate does NOT ship (deferred to Iteration 2)
+//! ## What this crate does NOT ship (deferred)
 //!
-//! - **`Auth(Claims)` extractor** — requires `walastack-app` /
-//!   `HttpService` to inject the `RuntimeContext` into request
-//!   extensions so `FromRequestParts` can reach the `JwtCodec`. That
-//!   change is its own focused batch and shouldn't expand this one.
 //! - **Cookie-based session integration** — belongs in a sibling
 //!   `walastack-cookie` crate.
 //! - **OAuth / OIDC / SAML / SCIM / enterprise SSO** — all deferred
@@ -36,6 +39,10 @@
 //! - **Asymmetric (RS256 / ES256) signing keys + KMS providers** —
 //!   the trait is HS256-shaped today; landing RS256 requires a
 //!   key-pair-aware `SecretsProvider` variant.
+//! - **Generic `Auth<C>` for custom Claims payloads** — `Auth(Claims)`
+//!   is the validated shape; generic later if real use cases require.
+//! - **Role-checking middleware / macros** — handlers compose
+//!   `claims.has_role(...)` inline; declarative form lands later.
 //!
 //! ## Sovereignty discipline
 //!
@@ -54,12 +61,17 @@ use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use bytes::Bytes;
 use chrono::Utc;
+use http::request::Parts;
 use jsonwebtoken::{
     Algorithm, DecodingKey, EncodingKey, Header, TokenData, Validation, decode, encode,
 };
 use serde::{Deserialize, Serialize};
-use walastack_runtime::{CapabilityRegistry, CapabilityRequirement, Plugin, RuntimeContext};
+use walastack_http::{Body, FromRequestParts, IntoResponse, Response};
+use walastack_runtime::{
+    CapabilityRegistry, CapabilityRequirement, Plugin, ResourceRegistry, RuntimeContext,
+};
 
 // =========================================================================
 // SecretsProvider capability
@@ -505,13 +517,34 @@ impl fmt::Debug for InMemorySessionStorePlugin {
 ///
 /// In-process `JwtCodec` construction happens after `Runtime` build via
 /// [`JwtCodec::from_runtime`].
-pub struct AuthPlugin;
+pub struct AuthPlugin {
+    jwt: Option<JwtSettings>,
+}
 
 impl AuthPlugin {
-    /// Construct the plugin.
+    /// Construct the plugin without JWT extractor settings. Direct
+    /// `JwtCodec::from_runtime` use still works; only the `Auth`
+    /// extractor needs settings registered.
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self { jwt: None }
+    }
+
+    /// Attach JWT settings so the [`Auth`] extractor can resolve a
+    /// [`JwtCodec`] per-request. The `key_name` identifies the secret
+    /// to fetch from the registered `SecretsProvider`; the `config`
+    /// drives issuer / audience / TTL.
+    ///
+    /// Internally the settings are inserted into the `ResourceRegistry`
+    /// at build time as a [`JwtSettings`] resource; the extractor reads
+    /// them through `RuntimeContext::resource`.
+    #[must_use]
+    pub fn with_jwt(mut self, key_name: impl Into<String>, config: JwtConfig) -> Self {
+        self.jwt = Some(JwtSettings {
+            key_name: key_name.into(),
+            config,
+        });
+        self
     }
 }
 
@@ -526,6 +559,12 @@ impl Plugin for AuthPlugin {
         "auth"
     }
 
+    fn register_resources(&self, registry: &mut ResourceRegistry) {
+        if let Some(settings) = &self.jwt {
+            registry.insert(settings.clone());
+        }
+    }
+
     fn required_capabilities(&self) -> Vec<CapabilityRequirement> {
         vec![CapabilityRequirement::any::<dyn SecretsProvider>()]
     }
@@ -533,7 +572,185 @@ impl Plugin for AuthPlugin {
 
 impl fmt::Debug for AuthPlugin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AuthPlugin").finish()
+        f.debug_struct("AuthPlugin")
+            .field("jwt", &self.jwt.as_ref().map(|s| &s.key_name))
+            .finish()
+    }
+}
+
+// =========================================================================
+// JwtSettings (Resource)
+// =========================================================================
+
+/// Resolved JWT configuration registered into the `ResourceRegistry`
+/// by [`AuthPlugin::with_jwt`].
+///
+/// Stored as a `Resource` so the [`Auth`] extractor can reconstruct a
+/// [`JwtCodec`] per request without re-reading the secret on every call
+/// (the underlying `SecretsProvider` is consulted once per extraction;
+/// caching it across requests is left to a future iteration).
+#[derive(Clone, Debug)]
+pub struct JwtSettings {
+    /// Name passed to `SecretsProvider::get` to fetch the signing key.
+    pub key_name: String,
+    /// Codec configuration.
+    pub config: JwtConfig,
+}
+
+// =========================================================================
+// Auth extractor
+// =========================================================================
+
+/// Request extractor producing the [`Claims`] decoded from the
+/// `Authorization: Bearer <token>` header.
+///
+/// Wiring (see [crate-level docs](crate)):
+///
+/// 1. Register a `SecretsProvider` plugin (e.g. [`InMemorySecretsPlugin`]).
+/// 2. Register `AuthPlugin::new().with_jwt(key_name, config)`.
+/// 3. Handlers take `Auth(Claims): Auth` as a parameter.
+///
+/// On extraction failure, returns an [`AuthRejection`] which renders
+/// `401 Unauthorized` for client errors and `500 Internal Server Error`
+/// for server-side misconfiguration (no `RuntimeContext` extension,
+/// missing [`JwtSettings`] resource, missing `SecretsProvider`
+/// capability, missing secret value).
+#[derive(Clone, Debug)]
+pub struct Auth(pub Claims);
+
+impl FromRequestParts for Auth {
+    type Rejection = AuthRejection;
+
+    fn from_request_parts(
+        parts: &mut Parts,
+    ) -> impl std::future::Future<Output = std::result::Result<Self, Self::Rejection>> + Send {
+        // Resolve everything synchronously up-front so the returned
+        // future is trivially `Send` regardless of `dyn` trait objects.
+        let result = (|| -> Result<Claims, AuthRejection> {
+            let runtime = parts
+                .extensions
+                .get::<RuntimeContext>()
+                .ok_or(AuthRejection::MissingRuntimeContext)?;
+            let settings = runtime
+                .resource::<JwtSettings>()
+                .ok_or(AuthRejection::MissingJwtSettings)?;
+            let codec =
+                JwtCodec::from_runtime(runtime, &settings.key_name, settings.config.clone())
+                    .map_err(AuthRejection::from_construction_error)?;
+            let header = parts
+                .headers
+                .get(http::header::AUTHORIZATION)
+                .ok_or(AuthRejection::MissingAuthorizationHeader)?
+                .to_str()
+                .map_err(|_| AuthRejection::MalformedAuthorizationHeader)?;
+            let token = header
+                .strip_prefix("Bearer ")
+                .or_else(|| header.strip_prefix("bearer "))
+                .ok_or(AuthRejection::MalformedAuthorizationHeader)?
+                .trim();
+            if token.is_empty() {
+                return Err(AuthRejection::MalformedAuthorizationHeader);
+            }
+            codec.decode(token).map_err(|_| AuthRejection::InvalidToken)
+        })();
+        async move { result.map(Auth) }
+    }
+}
+
+// =========================================================================
+// AuthRejection
+// =========================================================================
+
+/// Failure modes for the [`Auth`] extractor.
+///
+/// **Client errors (401):**
+/// - missing `Authorization` header
+/// - malformed header (not `Bearer <token>` or non-ASCII)
+/// - invalid token (bad signature, expired, wrong issuer, etc.)
+///
+/// **Server errors (500):**
+/// - `HttpService` did not inject the [`RuntimeContext`] extension
+/// - [`AuthPlugin::with_jwt`] was not called during build
+/// - `SecretsProvider` capability was not registered (build should have
+///   already failed, but defensive)
+/// - the named secret is not present in the provider
+#[derive(Clone, Debug)]
+pub enum AuthRejection {
+    /// `Authorization` header absent.
+    MissingAuthorizationHeader,
+    /// Header present but not parseable as `Bearer <token>`.
+    MalformedAuthorizationHeader,
+    /// Token failed signature / expiration / claim validation.
+    InvalidToken,
+    /// `HttpService` did not inject `RuntimeContext` — server bug.
+    MissingRuntimeContext,
+    /// `AuthPlugin::with_jwt` was not configured — server misconfig.
+    MissingJwtSettings,
+    /// `SecretsProvider` capability missing — should not normally
+    /// happen because `AuthPlugin` declares a capability requirement
+    /// that fails the build. Defensive in case the extractor is used
+    /// without `AuthPlugin`.
+    SecretsProviderMissing,
+    /// The configured secret name is not present in the provider —
+    /// server misconfig (operator did not set the JWT signing key).
+    SecretNotFound(String),
+}
+
+impl AuthRejection {
+    fn from_construction_error(err: AuthError) -> Self {
+        match err {
+            AuthError::SecretsProviderMissing => Self::SecretsProviderMissing,
+            AuthError::SecretNotFound(name) => Self::SecretNotFound(name),
+            AuthError::Jwt(_) => Self::InvalidToken,
+        }
+    }
+
+    /// HTTP status code for this rejection.
+    #[must_use]
+    pub const fn status(&self) -> http::StatusCode {
+        match self {
+            Self::MissingAuthorizationHeader
+            | Self::MalformedAuthorizationHeader
+            | Self::InvalidToken => http::StatusCode::UNAUTHORIZED,
+            Self::MissingRuntimeContext
+            | Self::MissingJwtSettings
+            | Self::SecretsProviderMissing
+            | Self::SecretNotFound(_) => http::StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+impl fmt::Display for AuthRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingAuthorizationHeader => f.write_str("missing Authorization header"),
+            Self::MalformedAuthorizationHeader => f.write_str("malformed Authorization header"),
+            Self::InvalidToken => f.write_str("invalid token"),
+            Self::MissingRuntimeContext => f.write_str("runtime context not present on request"),
+            Self::MissingJwtSettings => f.write_str("AuthPlugin::with_jwt was not configured"),
+            Self::SecretsProviderMissing => f.write_str("no SecretsProvider capability registered"),
+            Self::SecretNotFound(name) => write!(f, "JWT secret {name:?} not found"),
+        }
+    }
+}
+
+impl std::error::Error for AuthRejection {}
+
+impl IntoResponse for AuthRejection {
+    fn into_response(self) -> Response {
+        let status = self.status();
+        let body = if status == http::StatusCode::UNAUTHORIZED {
+            // Don't leak which specific client mistake it was.
+            "Unauthorized"
+        } else {
+            // Server-side misconfiguration. Log details; response is
+            // intentionally generic.
+            tracing::error!(error = %self, "auth extractor server misconfiguration");
+            "Internal Server Error"
+        };
+        let mut response = Response::new(Body::new(Bytes::from_static(body.as_bytes())));
+        *response.status_mut() = status;
+        response
     }
 }
 
@@ -866,5 +1083,132 @@ mod tests {
             .unwrap();
         let sessions = runtime.context().capability::<dyn SessionStore>().unwrap();
         assert!(sessions.get("nope").is_none());
+    }
+
+    // ---- Auth extractor + AuthRejection ----
+
+    fn auth_runtime() -> walastack_runtime::Runtime {
+        Runtime::builder()
+            .with_plugin(InMemorySecretsPlugin::new().with("jwt", b"extractor-signing-secret"))
+            .with_plugin(AuthPlugin::new().with_jwt("jwt", JwtConfig::new("walastack-tests")))
+            .build()
+            .unwrap()
+    }
+
+    async fn extract_auth(
+        runtime: &walastack_runtime::Runtime,
+        header: Option<&str>,
+    ) -> std::result::Result<Auth, AuthRejection> {
+        let mut builder = http::Request::builder().method("GET").uri("/");
+        if let Some(value) = header {
+            builder = builder.header(http::header::AUTHORIZATION, value);
+        }
+        let request = builder
+            .body(walastack_http::Body::new(bytes::Bytes::new()))
+            .unwrap();
+        let (mut parts, _body) = request.into_parts();
+        parts.extensions.insert(runtime.context().clone());
+        <Auth as FromRequestParts>::from_request_parts(&mut parts).await
+    }
+
+    #[tokio::test]
+    async fn auth_extractor_returns_claims_for_valid_bearer_token() {
+        let runtime = auth_runtime();
+        let codec =
+            JwtCodec::from_runtime(runtime.context(), "jwt", JwtConfig::new("walastack-tests"))
+                .unwrap();
+        let claims = codec.issue("user-42", vec!["admin".into()]);
+        let token = codec.encode(&claims).unwrap();
+
+        let Auth(decoded) = extract_auth(&runtime, Some(&format!("Bearer {token}")))
+            .await
+            .unwrap();
+        assert_eq!(decoded.sub, "user-42");
+        assert!(decoded.has_role("admin"));
+    }
+
+    #[tokio::test]
+    async fn auth_extractor_rejects_missing_authorization_header() {
+        let runtime = auth_runtime();
+        let err = extract_auth(&runtime, None).await.unwrap_err();
+        assert!(matches!(err, AuthRejection::MissingAuthorizationHeader));
+        assert_eq!(err.status(), http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_extractor_rejects_invalid_token() {
+        let runtime = auth_runtime();
+        let err = extract_auth(&runtime, Some("Bearer not.a.token"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AuthRejection::InvalidToken));
+        assert_eq!(err.status(), http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_extractor_rejects_malformed_authorization_header() {
+        let runtime = auth_runtime();
+        let err = extract_auth(&runtime, Some("Basic abc123"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AuthRejection::MalformedAuthorizationHeader));
+        assert_eq!(err.status(), http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_extractor_returns_500_when_jwt_settings_missing() {
+        // AuthPlugin::new() without with_jwt — settings resource absent.
+        let runtime = Runtime::builder()
+            .with_plugin(InMemorySecretsPlugin::new().with("jwt", b"x"))
+            .with_plugin(AuthPlugin::new())
+            .build()
+            .unwrap();
+
+        let err = extract_auth(&runtime, Some("Bearer anything"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AuthRejection::MissingJwtSettings));
+        assert_eq!(err.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // ---- Handler-level integration: TestClient + Auth extractor ----
+
+    #[tokio::test]
+    async fn protected_handler_with_auth_extractor_round_trips_through_test_client() {
+        use walastack_app::App;
+        use walastack_test::TestClient;
+
+        async fn protected(Auth(claims): Auth) -> String {
+            format!("hello, {} (admin={})", claims.sub, claims.has_role("admin"))
+        }
+
+        let runtime = auth_runtime();
+        let codec =
+            JwtCodec::from_runtime(runtime.context(), "jwt", JwtConfig::new("walastack-tests"))
+                .unwrap();
+        let claims = codec.issue("alice", vec!["admin".into()]);
+        let token = codec.encode(&claims).unwrap();
+
+        let app = App::new().get("/protected", protected);
+        let client = TestClient::with_runtime(app, &runtime);
+
+        // Valid token → 200.
+        let response = client
+            .get_with_headers(
+                "/protected",
+                &[("authorization", &format!("Bearer {token}"))],
+            )
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+
+        // Missing header → 401.
+        let response = client.get("/protected").await;
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+
+        // Invalid token → 401.
+        let response = client
+            .get_with_headers("/protected", &[("authorization", "Bearer garbage")])
+            .await;
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
     }
 }

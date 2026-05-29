@@ -2239,13 +2239,18 @@ dependencies = [
 name = "walastack-auth"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "chrono",
+ "http",
  "jsonwebtoken",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
+ "walastack-app",
+ "walastack-http",
  "walastack-runtime",
+ "walastack-test",
 ]
 
 [[package]]
@@ -2351,6 +2356,7 @@ dependencies = [
  "walastack-app",
  "walastack-http",
  "walastack-router",
+ "walastack-runtime",
 ]
 
 [[package]]
