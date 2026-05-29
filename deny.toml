@@ -20,6 +20,11 @@ allow = [
   "Zlib",
   "CC0-1.0",
   "MPL-2.0",
+  # CDLA-Permissive-2.0 is the Linux Foundation's permissive data-license,
+  # used by webpki-roots (pulled in transitively by sqlx and reqwest) for
+  # the Mozilla CA trust root bundle. Functionally permissive in the same
+  # way as MIT/Apache-2.0 for data assets.
+  "CDLA-Permissive-2.0",
 ]
 
 [bans]
