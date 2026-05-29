@@ -1,0 +1,30 @@
+[package]
+name        = "walastack-llm"
+description = "Llm capability + OpenAI + Ollama providers for the WalaStack Runtime Kernel. Capability-only; no AgentService, no tools."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+documentation.workspace = true
+authors.workspace      = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lints]
+workspace = true
+
+[features]
+default  = ["openai", "ollama"]
+openai   = ["dep:reqwest", "dep:serde_json"]
+ollama   = ["dep:reqwest", "dep:serde_json"]
+
+[dependencies]
+walastack-runtime = { workspace = true }
+tokio             = { workspace = true }
+tracing           = { workspace = true }
+serde             = { workspace = true }
+reqwest           = { workspace = true, optional = true }
+serde_json        = { workspace = true, optional = true }

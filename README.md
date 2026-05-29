@@ -6,9 +6,7 @@
 `walastack-rs` is the primary Rust Cargo workspace for the WalaStack ecosystem,
 developed and stewarded by [Wala Labs](https://walalabs.tech).
 
-It is the foundation for a Rust-first, AI-native, offline-capable infrastructure
-ecosystem combining a web framework, runtime, AI orchestration SDK, offline sync
-engine, deployment tooling, observability, and (eventually) edge/WASM execution.
+It is the foundation for a Rust-first application platform focused on resilience, extensibility, and provider-agnostic infrastructure. The ecosystem is designed to support web applications, runtime services, observability, AI integrations, offline-first systems, and sovereign deployment scenarios.
 
 ---
 
@@ -64,8 +62,7 @@ low latency, and sovereign deployment matter — public-sector platforms,
 humanitarian operations, low-connectivity contexts, and AI-native applications
 that need graceful degradation.
 
-The Rust workspace is the technical foundation; the broader strategy is
-documented in the [WalaStack architecture spec](https://walastack.com/docs/architecture).
+The Rust workspace serves as the core open-source foundation of the WalaStack ecosystem.
 
 ---
 

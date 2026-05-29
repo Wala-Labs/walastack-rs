@@ -1,0 +1,31 @@
+[package]
+name        = "walastack-db"
+description = "Database capability + first providers (sqlite, postgres) for the WalaStack Runtime Kernel."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+documentation.workspace = true
+authors.workspace      = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lints]
+workspace = true
+
+[features]
+default  = ["sqlite"]
+sqlite   = ["sqlx/sqlite"]
+postgres = ["sqlx/postgres"]
+
+[dependencies]
+walastack-runtime = { workspace = true }
+sqlx              = { workspace = true }
+tokio             = { workspace = true }
+tracing           = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

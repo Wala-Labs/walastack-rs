@@ -33,6 +33,8 @@
 
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_panics_doc)]
+// tokio::select! generates pub(crate) items inside a private module.
+#![allow(clippy::redundant_pub_crate)]
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -47,10 +49,14 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
 use walastack_http::{
     Body, Error, FromRequest, FromRequestParts, IntoResponse, Request, Response, Result,
 };
 use walastack_router::{BoxedHandler, Router};
+use walastack_runtime::{
+    BoxedServiceFuture, Runtime, Service, ServiceContext, ServiceError, ShutdownSignal,
+};
 
 /// Trait for types that register themselves as routes on an [`App`].
 ///
@@ -347,43 +353,57 @@ impl App {
         self
     }
 
-    /// Bind to `addr` and serve indefinitely.
+    /// Bind to `addr` and serve until the kernel shutdown signal fires.
     ///
     /// `addr` is parsed as a [`SocketAddr`] (e.g. `"127.0.0.1:3000"`).
-    /// Returns `Err` if the address is malformed, the socket cannot be bound,
-    /// or an I/O error occurs while accepting connections.
+    /// Returns `Err` if the address is malformed, the socket cannot be
+    /// bound, or the kernel returns a startup error.
+    ///
+    /// Internally this constructs a [`Runtime`] with a single
+    /// [`HttpService`] and runs it. To compose the HTTP surface with
+    /// other Services, drop down to [`Runtime::builder`] directly and
+    /// add the [`HttpService`] explicitly via [`App::into_http_service`].
     pub async fn run(self, addr: impl AsRef<str> + Send) -> Result<()> {
-        let addr_str = addr.as_ref();
-        let addr: SocketAddr = addr_str.parse().map_err(|e: std::net::AddrParseError| {
-            Error::InvalidAddress(format!("{addr_str}: {e}"))
-        })?;
+        let parsed = parse_addr(addr.as_ref())?;
+        let http = HttpService::new(parsed, self.router);
 
-        let listener = TcpListener::bind(addr).await?;
-        tracing::info!(%addr, "walastack listening");
-
-        let router = Arc::new(self.router);
-
-        loop {
-            let (stream, peer_addr) = listener.accept().await?;
-            let router = router.clone();
-
-            tokio::spawn(async move {
-                let io = TokioIo::new(stream);
-
-                let service = service_fn(move |req: hyper::Request<Incoming>| {
-                    let router = router.clone();
-                    async move {
-                        let response = serve_request(&router, req).await;
-                        Ok::<_, std::convert::Infallible>(response)
-                    }
-                });
-
-                if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-                    tracing::warn!(%peer_addr, error = %err, "connection error");
-                }
-            });
-        }
+        Runtime::builder()
+            .with(http)
+            .run()
+            .await
+            .map_err(|e| Error::Custom(e.to_string()))
     }
+
+    /// Consume the app and return an [`HttpService`] bound to `addr`.
+    ///
+    /// Useful for composing the HTTP surface alongside other Services in
+    /// an explicit [`Runtime::builder`] composition:
+    ///
+    /// ```no_run
+    /// # use walastack_app::App;
+    /// # use walastack_runtime::Runtime;
+    /// # async fn _example() -> walastack_runtime::RuntimeError {
+    /// let http = App::new()
+    ///     .get("/", || async { "hello" })
+    ///     .into_http_service("127.0.0.1:3000")
+    ///     .expect("valid addr");
+    ///
+    /// Runtime::builder()
+    ///     .with(http)
+    ///     .run()
+    ///     .await
+    ///     .unwrap_err()
+    /// # }
+    /// ```
+    pub fn into_http_service(self, addr: impl AsRef<str>) -> Result<HttpService> {
+        let parsed = parse_addr(addr.as_ref())?;
+        Ok(HttpService::new(parsed, self.router))
+    }
+}
+
+fn parse_addr(addr: &str) -> Result<SocketAddr> {
+    addr.parse()
+        .map_err(|e: std::net::AddrParseError| Error::InvalidAddress(format!("{addr}: {e}")))
 }
 
 impl Default for App {
@@ -431,4 +451,122 @@ fn bad_request(message: &'static str) -> Response {
     let mut response = Response::new(Body::new(Bytes::from_static(message.as_bytes())));
     *response.status_mut() = http::StatusCode::BAD_REQUEST;
     response
+}
+
+// =========================================================================
+// HttpService
+// =========================================================================
+
+/// The HTTP transport [`Service`].
+///
+/// Constructed via [`App::into_http_service`] or directly via
+/// [`HttpService::new`]. Registered with a [`Runtime`] through
+/// [`walastack_runtime::RuntimeBuilder::with`]:
+///
+/// ```no_run
+/// # use walastack_app::App;
+/// # use walastack_runtime::Runtime;
+/// # async fn _example() -> walastack_runtime::RuntimeError {
+/// let http = App::new()
+///     .get("/health", || async { "ok" })
+///     .into_http_service("127.0.0.1:3000")
+///     .expect("valid addr");
+///
+/// Runtime::builder()
+///     .with(http)
+///     .run()
+///     .await
+///     .unwrap_err()
+/// # }
+/// ```
+///
+/// The accept loop subscribes to the kernel shutdown signal via
+/// [`ServiceContext::shutdown_signal`] and drains cleanly when the
+/// kernel signals shutdown.
+pub struct HttpService {
+    addr: SocketAddr,
+    router: Arc<Router>,
+}
+
+impl HttpService {
+    /// Construct an `HttpService` bound to the given address with the
+    /// given router.
+    #[must_use]
+    pub fn new(addr: SocketAddr, router: Router) -> Self {
+        Self {
+            addr,
+            router: Arc::new(router),
+        }
+    }
+
+    /// The bound address.
+    #[must_use]
+    pub const fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+}
+
+impl Service for HttpService {
+    fn name(&self) -> &'static str {
+        "http"
+    }
+
+    fn start(
+        &self,
+        ctx: ServiceContext,
+    ) -> BoxedServiceFuture<core::result::Result<JoinHandle<()>, ServiceError>> {
+        let addr = self.addr;
+        let router = Arc::clone(&self.router);
+        Box::pin(async move {
+            let listener = TcpListener::bind(addr).await.map_err(ServiceError::from)?;
+            tracing::info!(%addr, "walastack listening");
+            let shutdown = ctx.shutdown_signal();
+            let handle = tokio::spawn(accept_loop(listener, router, shutdown));
+            Ok(handle)
+        })
+    }
+}
+
+impl std::fmt::Debug for HttpService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpService")
+            .field("addr", &self.addr)
+            .finish_non_exhaustive()
+    }
+}
+
+async fn accept_loop(listener: TcpListener, router: Arc<Router>, mut shutdown: ShutdownSignal) {
+    loop {
+        tokio::select! {
+            () = shutdown.wait() => {
+                tracing::info!("walastack shutdown signal received");
+                break;
+            }
+            accept_result = listener.accept() => {
+                match accept_result {
+                    Ok((stream, peer_addr)) => {
+                        let router = Arc::clone(&router);
+                        tokio::spawn(async move {
+                            let io = TokioIo::new(stream);
+                            let service = service_fn(move |req: hyper::Request<Incoming>| {
+                                let router = Arc::clone(&router);
+                                async move {
+                                    let response = serve_request(&router, req).await;
+                                    Ok::<_, std::convert::Infallible>(response)
+                                }
+                            });
+                            if let Err(err) =
+                                http1::Builder::new().serve_connection(io, service).await
+                            {
+                                tracing::warn!(%peer_addr, error = %err, "connection error");
+                            }
+                        });
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "accept error; continuing");
+                    }
+                }
+            }
+        }
+    }
 }

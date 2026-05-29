@@ -29,7 +29,18 @@ pub use walastack_http::{
 };
 pub use walastack_macros::{delete, get, main, post, put};
 pub use walastack_router::Router;
-pub use walastack_runtime::{init_tracing, wait_for_shutdown_signal};
+pub use walastack_runtime::{
+    Backoff, BoxedServiceFuture, Capabilities, CapabilityName, CapabilityRegistry,
+    CapabilityRequirement, CronSchedule, DEFAULT_BROADCAST_CAPACITY, DEFAULT_NAME,
+    DEFAULT_SHUTDOWN_DEADLINE, DEFAULT_WORK_CAPACITY, EnqueueError, EnqueueErrorKind, EventBus,
+    Plugin, PluginError, PluginManager, Policies, PublishOutcome, RecvError, ResourceRegistry,
+    Resources, RestartPolicy, RetryPolicy, Runtime, RuntimeBuilder, RuntimeContext, RuntimeError,
+    RuntimeStarted, RuntimeStarting, RuntimeStopped, RuntimeStopping, ScheduleHandle, ScheduleId,
+    ScheduledFn, Scheduler, SchedulerError, SelectionStrategy, Service, ServiceContext,
+    ServiceError, ServiceFailed, ServicePlanner, ServiceStarted, ServiceStopped, ShutdownSignal,
+    Subscriber, SupervisionTree, TaskCompleted, TaskError, TaskFailed, TaskFired, TaskResult,
+    TaskRetrying, Trigger, Worker, init_tracing, wait_for_shutdown_signal,
+};
 
 /// Internal re-exports used by procedural macros. Not part of the public API.
 #[doc(hidden)]
