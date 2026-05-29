@@ -35,6 +35,9 @@
 #![allow(clippy::missing_panics_doc)]
 // tokio::select! generates pub(crate) items inside a private module.
 #![allow(clippy::redundant_pub_crate)]
+// "OpenAPI" is a domain name, not a code identifier. Backticking every
+// mention would hurt readability for no gain.
+#![allow(clippy::doc_markdown)]
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -53,9 +56,10 @@ use tokio::task::JoinHandle;
 use walastack_http::{
     Body, Error, FromRequest, FromRequestParts, IntoResponse, Request, Response, Result,
 };
+use walastack_openapi::{OpenApiConfig, OpenApiRoutes, RouteSpec, render_document};
 use walastack_router::{BoxedHandler, Router};
 use walastack_runtime::{
-    BoxedServiceFuture, Runtime, RuntimeContext, Service, ServiceContext, ServiceError,
+    BoxedServiceFuture, Plugin, Runtime, RuntimeContext, Service, ServiceContext, ServiceError,
     ShutdownSignal,
 };
 
@@ -261,8 +265,15 @@ where
 /// Compose routes via the method helpers (`.get`, `.post`, `.put`, `.delete`)
 /// or the macro-driven [`App::route`] method, then call [`App::run`] to bind
 /// to a socket and serve indefinitely.
+///
+/// Plugins may be attached via [`App::with_plugin`] — they are forwarded
+/// to the underlying [`Runtime`] when the app runs. OpenAPI metadata
+/// may be attached per-route via [`App::openapi_route`] and served via
+/// [`App::openapi_serve_at`].
 pub struct App {
     router: Router,
+    plugins: Vec<Arc<dyn Plugin>>,
+    openapi_routes: Vec<RouteSpec>,
 }
 
 impl App {
@@ -271,7 +282,55 @@ impl App {
     pub fn new() -> Self {
         Self {
             router: Router::new(),
+            plugins: Vec::new(),
+            openapi_routes: Vec::new(),
         }
+    }
+
+    /// Attach a kernel `Plugin` to the application. The plugin is
+    /// forwarded to the underlying `Runtime::builder()` when the app
+    /// runs. Useful for ecosystem plugins that contribute resources,
+    /// capabilities, or services (`AuthPlugin`, `OpenApiPlugin`, etc.).
+    #[must_use]
+    pub fn with_plugin<P: Plugin>(mut self, plugin: P) -> Self {
+        self.plugins.push(Arc::new(plugin));
+        self
+    }
+
+    /// Register an OpenAPI-described route. Registers `handler` at
+    /// `spec.path` with `spec.method`, and records `spec` for later
+    /// retrieval by [`App::openapi_serve_at`].
+    ///
+    /// The path follows WalaStack's routing syntax (`:name`); when the
+    /// OpenAPI document is rendered, parameters are normalized to
+    /// OpenAPI's `{name}` syntax automatically.
+    #[must_use]
+    pub fn openapi_route<H, P>(mut self, handler: H, spec: RouteSpec) -> Self
+    where
+        H: Handler<P>,
+        P: 'static,
+    {
+        let method = method_from_openapi(spec.method);
+        let path = spec.path.clone();
+        self.openapi_routes.push(spec);
+        self.add_route(method, &path, handler)
+    }
+
+    /// Register a `GET` endpoint that serves the OpenAPI 3.0 JSON
+    /// document. Reads `OpenApiConfig` from the kernel `Resource`
+    /// registry (registered by `OpenApiPlugin`) and combines it with
+    /// the routes accumulated via [`App::openapi_route`].
+    ///
+    /// If `OpenApiConfig` is not registered (no `OpenApiPlugin`
+    /// attached), the endpoint returns `500 Internal Server Error`.
+    #[must_use]
+    pub fn openapi_serve_at(mut self, path: &str) -> Self {
+        let routes = Arc::new(self.openapi_routes.clone());
+        self.openapi_routes = Vec::new();
+        let handler = openapi_handler(routes);
+        let boxed: BoxedHandler = Box::new(move |req: Request| Box::pin(handler.clone()(req)));
+        self.router = self.router.route(Method::GET, path, boxed);
+        self
     }
 
     /// Register a `GET` handler for `path`.
@@ -361,14 +420,21 @@ impl App {
     /// bound, or the kernel returns a startup error.
     ///
     /// Internally this constructs a [`Runtime`] with a single
-    /// [`HttpService`] and runs it. To compose the HTTP surface with
-    /// other Services, drop down to [`Runtime::builder`] directly and
-    /// add the [`HttpService`] explicitly via [`App::into_http_service`].
+    /// [`HttpService`] and runs it. Plugins attached via
+    /// [`App::with_plugin`] are forwarded to the runtime. To compose
+    /// the HTTP surface with other Services, drop down to
+    /// [`Runtime::builder`] directly and add the [`HttpService`]
+    /// explicitly via [`App::into_http_service`].
     pub async fn run(self, addr: impl AsRef<str> + Send) -> Result<()> {
         let parsed = parse_addr(addr.as_ref())?;
+        let plugins = self.plugins;
         let http = HttpService::new(parsed, self.router);
 
-        Runtime::builder()
+        let mut builder = Runtime::builder();
+        for plugin in plugins {
+            builder = builder.with_plugin_arc(plugin);
+        }
+        builder
             .with(http)
             .run()
             .await
@@ -407,6 +473,73 @@ fn parse_addr(addr: &str) -> Result<SocketAddr> {
         .map_err(|e: std::net::AddrParseError| Error::InvalidAddress(format!("{addr}: {e}")))
 }
 
+const fn method_from_openapi(method: walastack_openapi::Method) -> Method {
+    match method {
+        walastack_openapi::Method::Get => Method::GET,
+        walastack_openapi::Method::Post => Method::POST,
+        walastack_openapi::Method::Put => Method::PUT,
+        walastack_openapi::Method::Delete => Method::DELETE,
+        walastack_openapi::Method::Patch => Method::PATCH,
+        walastack_openapi::Method::Options => Method::OPTIONS,
+        walastack_openapi::Method::Head => Method::HEAD,
+        walastack_openapi::Method::Trace => Method::TRACE,
+    }
+}
+
+/// Build the per-request handler that serves the OpenAPI document.
+/// `routes` is captured once at `openapi_serve_at` time; `OpenApiConfig`
+/// is resolved per-request from `RuntimeContext::resource` so the
+/// document picks up any future hot-reloaded config without
+/// reattaching the endpoint.
+fn openapi_handler(
+    routes: Arc<Vec<RouteSpec>>,
+) -> impl Fn(Request) -> Pin<Box<dyn Future<Output = Response> + Send>> + Clone + Send + Sync + 'static
+{
+    move |req: Request| {
+        let routes = Arc::clone(&routes);
+        Box::pin(async move {
+            let Some(runtime) = req.extensions().get::<RuntimeContext>().cloned() else {
+                tracing::error!(
+                    "openapi handler invoked without RuntimeContext extension — \
+                     HttpService injection broken or not running through HttpService"
+                );
+                return internal_server_error();
+            };
+            let Some(config) = runtime.resource::<OpenApiConfig>() else {
+                tracing::error!(
+                    "openapi handler invoked without OpenApiConfig resource — \
+                     attach OpenApiPlugin via App::with_plugin"
+                );
+                return internal_server_error();
+            };
+            let document = render_document(&config, &routes);
+            // Also stash the routes as a Resource so other endpoints
+            // (future Plugin → HttpService extension batches) can
+            // resolve them too.
+            let _routes_resource = OpenApiRoutes(Arc::clone(&routes));
+            let body = match serde_json::to_vec(&document) {
+                Ok(bytes) => Bytes::from(bytes),
+                Err(e) => {
+                    tracing::error!(error = %e, "openapi document serialization failed");
+                    return internal_server_error();
+                }
+            };
+            let mut response = Response::new(Body::new(body));
+            response.headers_mut().insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+            response
+        })
+    }
+}
+
+fn internal_server_error() -> Response {
+    let mut response = Response::new(Body::new(Bytes::from_static(b"Internal Server Error")));
+    *response.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
+    response
+}
+
 impl Default for App {
     fn default() -> Self {
         Self::new()
@@ -415,7 +548,11 @@ impl Default for App {
 
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("App").field("router", &self.router).finish()
+        f.debug_struct("App")
+            .field("router", &self.router)
+            .field("plugins", &self.plugins.len())
+            .field("openapi_routes", &self.openapi_routes.len())
+            .finish()
     }
 }
 

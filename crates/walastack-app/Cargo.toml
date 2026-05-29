@@ -23,8 +23,10 @@ http-body-util    = { workspace = true }
 hyper             = { workspace = true }
 hyper-util        = { workspace = true }
 http-body         = { workspace = true }
+serde_json        = { workspace = true }
 tokio             = { workspace = true }
 tracing           = { workspace = true }
 walastack-http    = { workspace = true }
+walastack-openapi = { workspace = true }
 walastack-router  = { workspace = true }
 walastack-runtime = { workspace = true }

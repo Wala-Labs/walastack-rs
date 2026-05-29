@@ -1,0 +1,32 @@
+[package]
+name        = "walastack-openapi"
+description = "OpenAPI 3.0 spec generation for WalaStack. JSON-Schema-shaped Schema model + Plugin-based OpenApiConfig + App integration helpers (openapi_route / openapi_serve_at)."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+documentation.workspace = true
+authors.workspace      = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lints]
+workspace = true
+
+[dependencies]
+walastack-runtime = { workspace = true }
+walastack-http    = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+bytes             = { workspace = true }
+http              = { workspace = true }
+
+[dev-dependencies]
+walastack-app     = { workspace = true }
+walastack-test    = { workspace = true }
+tokio             = { workspace = true }
+http-body-util    = { workspace = true }
+bytes             = { workspace = true }
