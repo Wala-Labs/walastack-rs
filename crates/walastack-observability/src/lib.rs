@@ -228,19 +228,19 @@ impl ObservabilityState {
         };
     }
 
-    fn on_task_fired(&mut self) {
+    const fn on_task_fired(&mut self) {
         self.counts.tasks_fired = self.counts.tasks_fired.saturating_add(1);
     }
 
-    fn on_task_completed(&mut self) {
+    const fn on_task_completed(&mut self) {
         self.counts.tasks_completed = self.counts.tasks_completed.saturating_add(1);
     }
 
-    fn on_task_failed(&mut self) {
+    const fn on_task_failed(&mut self) {
         self.counts.tasks_failed = self.counts.tasks_failed.saturating_add(1);
     }
 
-    fn on_task_retrying(&mut self) {
+    const fn on_task_retrying(&mut self) {
         self.counts.tasks_retrying = self.counts.tasks_retrying.saturating_add(1);
     }
 

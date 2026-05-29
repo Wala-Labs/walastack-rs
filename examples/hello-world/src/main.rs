@@ -28,6 +28,8 @@
 //! curl http://127.0.0.1:3000/health
 //! ```
 
+use std::fmt::Write as _;
+
 use serde::{Deserialize, Serialize};
 use walastack::prelude::*;
 
@@ -62,7 +64,7 @@ async fn show_headers(headers: HeaderMap) -> String {
     let mut output = String::from("Request headers:\n");
     for (name, value) in &headers {
         let value_str = value.to_str().unwrap_or("<binary>");
-        output.push_str(&format!("  {name}: {value_str}\n"));
+        let _ = writeln!(output, "  {name}: {value_str}");
     }
     output
 }

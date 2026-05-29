@@ -130,8 +130,10 @@ pub enum Trigger {
     /// Fire on a cron schedule.
     ///
     /// Construct via [`Trigger::cron`] so the expression is validated at
-    /// schedule time rather than at fire time.
-    Cron(CronSchedule),
+    /// schedule time rather than at fire time. The inner schedule is
+    /// boxed because [`cron::Schedule`] is significantly larger than the
+    /// other variants — boxing keeps `Trigger` cheap to clone and pass.
+    Cron(Box<CronSchedule>),
 }
 
 impl Trigger {
@@ -142,7 +144,7 @@ impl Trigger {
     /// Returns [`SchedulerError::InvalidCronExpression`] when the
     /// expression cannot be parsed by the underlying [`cron`] crate.
     pub fn cron(expr: &str) -> Result<Self, SchedulerError> {
-        CronSchedule::new(expr).map(Self::Cron)
+        CronSchedule::new(expr).map(|s| Self::Cron(Box::new(s)))
     }
 
     const fn is_one_shot(&self) -> bool {

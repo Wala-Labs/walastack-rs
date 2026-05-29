@@ -214,11 +214,12 @@ impl fmt::Debug for CapabilityRegistry {
 ///
 /// [`Capabilities::get_named`] always performs direct exact-name lookup
 /// regardless of strategy.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum SelectionStrategy {
     /// Look up the provider registered under [`DEFAULT_NAME`].
     ///
     /// This is the default behavior when no strategy is explicitly set.
+    #[default]
     Single,
 
     /// Walk the chain of names in order, returning the first provider
@@ -235,12 +236,6 @@ pub enum SelectionStrategy {
     /// weight `0` is excluded from rotation. If the total weight is zero
     /// or no listed name has a registered provider, returns `None`.
     WeightedRoundRobin(Vec<(CapabilityName, u32)>),
-}
-
-impl Default for SelectionStrategy {
-    fn default() -> Self {
-        Self::Single
-    }
 }
 
 /// Frozen, `Arc`-shared, read-only capability view.

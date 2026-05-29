@@ -15,7 +15,7 @@
 //!   subscribers may [lag](RecvError::Lagged). Bound on `E`:
 //!   `Clone + Send + Sync + 'static`.
 //! - **Work-stealing** — each event is handled by exactly one worker.
-//!   Backed by [`async-channel`]. Multiple [`Worker`] handles for the
+//!   Backed by the `async-channel` crate. Multiple [`Worker`] handles for the
 //!   same `E` compete via the channel's mpmc primitive. Bound on `E`:
 //!   `Send + 'static`.
 //! - **Request-reply** — *not provided* in Phase 2.0.c. The Phase 1.85

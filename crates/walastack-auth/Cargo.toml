@@ -1,0 +1,26 @@
+[package]
+name        = "walastack-auth"
+description = "Authentication primitives for WalaStack — SecretsProvider capability + JWT + Sessions + RBAC primitives. Iteration 1 (no extractor yet)."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+documentation.workspace = true
+authors.workspace      = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lints]
+workspace = true
+
+[dependencies]
+walastack-runtime = { workspace = true }
+jsonwebtoken      = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+chrono            = { workspace = true }
+tokio             = { workspace = true }
+tracing           = { workspace = true }

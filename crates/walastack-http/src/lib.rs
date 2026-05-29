@@ -23,10 +23,10 @@ pub use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, Vers
 /// deferred to a later phase.
 pub type Body = http_body_util::Full<Bytes>;
 
-/// The canonical HTTP request type — `http::Request<`[`Body`]`>`.
+/// The canonical HTTP request type — <code>http::Request<[Body]></code>.
 pub type Request = http::Request<Body>;
 
-/// The canonical HTTP response type — `http::Response<`[`Body`]`>`.
+/// The canonical HTTP response type — <code>http::Response<[Body]></code>.
 pub type Response = http::Response<Body>;
 
 /// Convert a value into a [`Response`].
