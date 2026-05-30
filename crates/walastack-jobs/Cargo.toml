@@ -1,0 +1,28 @@
+[package]
+name        = "walastack-jobs"
+description = "Durable job queue + worker fan-out for WalaStack. Job trait, JobStore capability, supervised workers, EventBus lifecycle, Scheduler-driven retries. Sub-batch A (in-memory only)."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+documentation.workspace = true
+authors.workspace      = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lints]
+workspace = true
+
+[dependencies]
+walastack-runtime = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+tokio             = { workspace = true }
+tracing           = { workspace = true }
+chrono            = { workspace = true }
+
+[dev-dependencies]
+tokio-test        = { workspace = true }
