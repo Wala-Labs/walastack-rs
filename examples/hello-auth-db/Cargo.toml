@@ -1,0 +1,31 @@
+[package]
+name        = "hello-auth-db"
+description = "Realistic walastack-rs example — Plugin composition + Database capability + Auth extractor over a SQLite-backed user table."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+publish     = false
+
+[lints]
+workspace = true
+
+[dependencies]
+walastack         = { workspace = true }
+walastack-auth    = { workspace = true }
+walastack-db      = { workspace = true }
+walastack-http    = { workspace = true }
+walastack-runtime = { workspace = true }
+http              = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+sqlx              = { workspace = true, features = ["sqlite", "runtime-tokio"] }
+tracing           = { workspace = true }
+
+[dev-dependencies]
+walastack-test    = { workspace = true }
+tokio             = { workspace = true }
+http-body-util    = { workspace = true }
+bytes             = { workspace = true }
+http              = { workspace = true }

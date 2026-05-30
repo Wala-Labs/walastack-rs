@@ -19,6 +19,8 @@ workspace = true
 [dependencies]
 bytes             = { workspace = true }
 http              = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
 walastack-app     = { workspace = true }
 walastack-http    = { workspace = true }
 walastack-router  = { workspace = true }

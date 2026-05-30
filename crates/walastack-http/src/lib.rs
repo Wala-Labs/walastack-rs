@@ -66,6 +66,21 @@ impl IntoResponse for std::convert::Infallible {
     }
 }
 
+/// Allow handlers to return `Result<T, E>` where both arms are
+/// `IntoResponse`. This is the canonical handler-error pattern: define
+/// a domain-specific error enum that implements `IntoResponse` (with
+/// the [Rejection-Mapping Discipline](https://walastack.com/docs/conventions/rejection-mapping)
+/// in mind — sanitized public response, detailed `tracing` logs), then
+/// return `Result<Json<T>, MyError>`.
+impl<T: IntoResponse, E: IntoResponse> IntoResponse for std::result::Result<T, E> {
+    fn into_response(self) -> Response {
+        match self {
+            Ok(t) => t.into_response(),
+            Err(e) => e.into_response(),
+        }
+    }
+}
+
 fn text_response(bytes: Bytes) -> Response {
     let mut response = Response::new(Body::new(bytes));
     response.headers_mut().insert(

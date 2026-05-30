@@ -85,30 +85,62 @@ impl TestClient {
 
     /// Dispatch a `GET` request to `path`.
     pub async fn get(&self, path: &str) -> Response {
-        self.dispatch(Method::GET, path, &[]).await
+        self.dispatch(Method::GET, path, &[], Bytes::new()).await
     }
 
     /// Dispatch a `GET` request with custom headers.
     pub async fn get_with_headers(&self, path: &str, headers: &[(&str, &str)]) -> Response {
-        self.dispatch(Method::GET, path, headers).await
+        self.dispatch(Method::GET, path, headers, Bytes::new())
+            .await
     }
 
-    /// Dispatch a `POST` request to `path`.
+    /// Dispatch a `POST` request to `path` with no body.
     pub async fn post(&self, path: &str) -> Response {
-        self.dispatch(Method::POST, path, &[]).await
+        self.dispatch(Method::POST, path, &[], Bytes::new()).await
     }
 
-    /// Dispatch a `PUT` request to `path`.
+    /// Dispatch a `POST` request with a JSON body. Sets
+    /// `Content-Type: application/json` automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `400 Bad Request` response if the body cannot be
+    /// serialized.
+    pub async fn post_json<T: serde::Serialize + Sync>(&self, path: &str, body: &T) -> Response {
+        let Ok(bytes) = serde_json::to_vec(body) else {
+            return bad_request();
+        };
+        self.dispatch(
+            Method::POST,
+            path,
+            &[("content-type", "application/json")],
+            Bytes::from(bytes),
+        )
+        .await
+    }
+
+    /// Dispatch a `POST` request with custom headers and a raw body.
+    pub async fn post_with(&self, path: &str, headers: &[(&str, &str)], body: Bytes) -> Response {
+        self.dispatch(Method::POST, path, headers, body).await
+    }
+
+    /// Dispatch a `PUT` request to `path` with no body.
     pub async fn put(&self, path: &str) -> Response {
-        self.dispatch(Method::PUT, path, &[]).await
+        self.dispatch(Method::PUT, path, &[], Bytes::new()).await
     }
 
     /// Dispatch a `DELETE` request to `path`.
     pub async fn delete(&self, path: &str) -> Response {
-        self.dispatch(Method::DELETE, path, &[]).await
+        self.dispatch(Method::DELETE, path, &[], Bytes::new()).await
     }
 
-    async fn dispatch(&self, method: Method, path: &str, headers: &[(&str, &str)]) -> Response {
+    async fn dispatch(
+        &self,
+        method: Method,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Bytes,
+    ) -> Response {
         let mut builder = http::Request::builder().method(method).uri(path);
         for (name, value) in headers {
             let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
@@ -119,7 +151,7 @@ impl TestClient {
             };
             builder = builder.header(header_name, header_value);
         }
-        let Ok(request) = builder.body(Body::new(Bytes::new())) else {
+        let Ok(request) = builder.body(Body::new(body)) else {
             return bad_request();
         };
 
