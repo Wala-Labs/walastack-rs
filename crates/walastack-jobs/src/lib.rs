@@ -1,6 +1,6 @@
 //! Durable job queue + worker fan-out for WalaStack.
 //!
-//! ## What this crate ships (Iteration 1 Sub-batch A — in-memory only)
+//! ## What this crate ships (Iteration 1, through Sub-batch B)
 //!
 //! - [`Job`] — trait that turns a payload type into an executable unit.
 //!   Associated `Output` / `Error` types + `const NAME` + an
@@ -13,9 +13,10 @@
 //!   (capability + resource access), the attempt number, and the
 //!   `JobName` of the running job.
 //! - [`JobStore`] — capability for persistence + queueing. Ships an
-//!   in-memory provider ([`InMemoryJobStorePlugin`]) for dev, tests,
-//!   and sovereign single-node deployments. SQLite + PostgreSQL
-//!   providers ship in Sub-batch B / Iteration 2.
+//!   in-memory provider ([`InMemoryJobStorePlugin`]) for dev / tests /
+//!   sovereign single-node and a SQLite-backed provider
+//!   ([`sqlite::SqliteJobStorePlugin`]) for durable single-process
+//!   deployments. PostgreSQL provider lands in Iteration 2.
 //! - [`JobsConfig`] — top-level configuration registered as a kernel
 //!   `Resource`. **Third Resource-as-Configuration adoption** after
 //!   `JwtSettings` (auth) and `OpenApiConfig` (openapi); see
@@ -29,7 +30,8 @@
 //!
 //! ## Deferred
 //!
-//! - SQLite + PostgreSQL providers — Sub-batch B / Iteration 2.
+//! - PostgreSQL provider + multi-process worker validation —
+//!   Iteration 2.
 //! - Distributed coordination, priority queues, cancellation, webhooks,
 //!   result futures, LISTEN/NOTIFY, job DAGs, sagas, macro-based
 //!   registration — all out of Iteration 1 scope per locked decisions.
@@ -109,9 +111,8 @@ impl From<&str> for JobName {
 /// Per-job extension seam. All fields default to `None`; the worker
 /// resolves missing values against [`JobsConfig`] at dispatch time.
 ///
-/// Reserved-but-deferred: `timeout` and full `backoff` honoring land
-/// in Sub-batch B / Iteration 2. `queue` and `max_attempts` are
-/// honored in Sub-batch A.
+/// All four fields (`queue` / `max_attempts` / `timeout` / `backoff`)
+/// are honored as of Sub-batch B.
 #[derive(Clone, Debug, Default)]
 pub struct JobMetadata {
     /// Logical queue namespace. Routing only — not a priority.
@@ -119,10 +120,13 @@ pub struct JobMetadata {
     pub queue: Option<String>,
     /// Overrides `JobsConfig::default_max_attempts` when set.
     pub max_attempts: Option<u32>,
-    /// Reserved. Honored in a later iteration.
+    /// Per-job timeout. When set, the worker wraps `Job::run` in
+    /// `tokio::time::timeout`; expired runs surface as a failure with
+    /// a synthetic error string and are subject to the normal retry
+    /// budget.
     pub timeout: Option<Duration>,
-    /// Reserved. Honored in a later iteration. Falls back to
-    /// `JobsConfig::default_backoff` for now.
+    /// Per-job-type backoff override. When set, replaces
+    /// `JobsConfig::default_backoff` for this job's retry delays.
     pub backoff: Option<Backoff>,
 }
 
@@ -141,16 +145,19 @@ impl JobMetadata {
         self
     }
 
-    /// Reserved. Currently captured but not honored — Sub-batch B+ will
-    /// thread this into the worker dispatch path.
+    /// Set a per-job timeout. Worker wraps `Job::run` in
+    /// `tokio::time::timeout`; expired runs surface as a failure with
+    /// a synthetic error string and are subject to the normal retry
+    /// budget.
     #[must_use]
     pub const fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
 
-    /// Reserved. Currently captured but not honored — Sub-batch B+ will
-    /// honor this in place of `JobsConfig::default_backoff`.
+    /// Set a per-job-type backoff override. Replaces
+    /// `JobsConfig::default_backoff` when computing retry delays for
+    /// this job type.
     #[must_use]
     pub fn backoff(mut self, backoff: Backoff) -> Self {
         self.backoff = Some(backoff);
@@ -871,7 +878,18 @@ async fn dispatch_one(
 
     let ctx = JobContext::new(runtime.clone(), record.name.clone(), record.attempt);
     let started_at = std::time::Instant::now();
-    let result = (entry.run)(record.payload.clone(), ctx).await;
+    let result = match entry.metadata.timeout {
+        Some(timeout) => {
+            match tokio::time::timeout(timeout, (entry.run)(record.payload.clone(), ctx)).await {
+                Ok(inner) => inner,
+                Err(_) => Err(format!(
+                    "job '{}' exceeded timeout of {:?}",
+                    record.name, timeout
+                )),
+            }
+        }
+        None => (entry.run)(record.payload.clone(), ctx).await,
+    };
 
     match result {
         Ok(()) => {
@@ -905,9 +923,16 @@ async fn dispatch_one(
             } else {
                 let next_attempt = record.attempt.saturating_add(1);
                 // Backoff's retry_index is 0-indexed for the delay before
-                // the second attempt; passing the next attempt as a
-                // retry_index works out to the right magnitude.
-                let delay = config.default_backoff.delay_for(record.attempt);
+                // the second attempt; passing the current attempt as a
+                // retry_index works out to the right magnitude. Per-job
+                // metadata.backoff overrides config.default_backoff when
+                // set.
+                let backoff = entry
+                    .metadata
+                    .backoff
+                    .as_ref()
+                    .unwrap_or(&config.default_backoff);
+                let delay = backoff.delay_for(record.attempt);
                 let next_at = Utc::now()
                     + chrono::Duration::from_std(delay)
                         .unwrap_or_else(|_| chrono::Duration::seconds(1));
@@ -1067,6 +1092,15 @@ pub async fn enqueue<J: Job>(ctx: &RuntimeContext, job: J) -> Result<JobId, Jobs
     });
     Ok(id)
 }
+
+// =========================================================================
+// SQLite provider (feature-gated)
+// =========================================================================
+
+/// SQLite-backed `JobStore` provider. Available when the `sqlite`
+/// feature is enabled (default).
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 
 // =========================================================================
 // Tests
@@ -1395,6 +1429,194 @@ mod tests {
         }
         assert!(completed, "flaky job did not complete within 3s");
         assert!(last_attempt >= 2, "expected at least 2 attempts");
+        runtime.shutdown_gracefully().await;
+    }
+
+    // ---- Sub-batch B: timeout + backoff metadata honoring ----
+
+    static SLOW_JOB_RAN_TO_COMPLETION: AtomicU32 = AtomicU32::new(0);
+
+    #[derive(Clone, Serialize, Deserialize)]
+    struct SlowJob;
+
+    impl Job for SlowJob {
+        type Output = ();
+        type Error = String;
+        const NAME: &'static str = "slow";
+        fn metadata() -> JobMetadata {
+            JobMetadata::default()
+                .timeout(Duration::from_millis(50))
+                // No retry — one attempt, fail.
+                .max_attempts(1)
+        }
+        async fn run(self, _ctx: JobContext) -> Result<(), String> {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            SLOW_JOB_RAN_TO_COMPLETION.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn job_metadata_timeout_aborts_long_running_job() {
+        SLOW_JOB_RAN_TO_COMPLETION.store(0, Ordering::SeqCst);
+        let plugin = JobsPlugin::new(
+            JobsConfig::default()
+                .with_worker_count(1)
+                .with_poll_interval(Duration::from_millis(10)),
+        )
+        .register::<SlowJob>();
+        let mut runtime = build_runtime_with_jobs(plugin);
+        runtime.start().await.expect("runtime starts");
+        let id = enqueue(runtime.context(), SlowJob).await.unwrap();
+        let store = runtime.context().capability::<dyn JobStore>().unwrap();
+        let mut terminal = false;
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let r = store.fetch(id).await.unwrap().unwrap();
+            if matches!(r.status, JobStatus::Dead | JobStatus::Completed) {
+                terminal = true;
+                break;
+            }
+        }
+        assert!(terminal, "timeout-bound job did not reach a terminal state");
+        let r = store.fetch(id).await.unwrap().unwrap();
+        assert_eq!(r.status, JobStatus::Dead);
+        assert_eq!(
+            SLOW_JOB_RAN_TO_COMPLETION.load(Ordering::SeqCst),
+            0,
+            "slow job should not have run to completion"
+        );
+        runtime.shutdown_gracefully().await;
+    }
+
+    // ---- Sub-batch B: sqlite provider ----
+
+    use crate::sqlite::{SqliteJobStore, SqliteJobStorePlugin};
+
+    async fn fresh_sqlite_store() -> SqliteJobStore {
+        let plugin = SqliteJobStorePlugin::in_memory();
+        let store = SqliteJobStore::new(plugin.pool().clone());
+        store.migrate().await.expect("migration succeeds");
+        store
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_enqueue_then_pull_returns_record() {
+        let store = fresh_sqlite_store().await;
+        let id = store
+            .enqueue(NewJob {
+                name: JobName::new("sqlite_test"),
+                payload: serde_json::json!({"a": 1}),
+                queue: "default".into(),
+                max_attempts: 3,
+                scheduled_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        let pulled = store.pull_next(vec!["default".into()]).await.unwrap();
+        let r = pulled.expect("pulled");
+        assert_eq!(r.id, id);
+        assert_eq!(r.attempt, 1);
+        assert_eq!(r.status, JobStatus::Running);
+        assert_eq!(r.payload, serde_json::json!({"a": 1}));
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_skips_queues_without_pending_jobs() {
+        let store = fresh_sqlite_store().await;
+        store
+            .enqueue(NewJob {
+                name: JobName::new("sqlite_test"),
+                payload: serde_json::json!({}),
+                queue: "email".into(),
+                max_attempts: 3,
+                scheduled_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            store
+                .pull_next(vec!["default".into()])
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .pull_next(vec!["email".into()])
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_mark_completed_persists_status() {
+        let store = fresh_sqlite_store().await;
+        let id = store
+            .enqueue(NewJob {
+                name: JobName::new("sqlite_test"),
+                payload: serde_json::json!({}),
+                queue: "default".into(),
+                max_attempts: 3,
+                scheduled_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        store.pull_next(vec!["default".into()]).await.unwrap();
+        store.mark_completed(id).await.unwrap();
+        let r = store.fetch(id).await.unwrap().unwrap();
+        assert_eq!(r.status, JobStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_retry_and_dead_transitions() {
+        let store = fresh_sqlite_store().await;
+        let id = store
+            .enqueue(NewJob {
+                name: JobName::new("sqlite_test"),
+                payload: serde_json::json!({}),
+                queue: "default".into(),
+                max_attempts: 2,
+                scheduled_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        store.pull_next(vec!["default".into()]).await.unwrap();
+        store
+            .mark_failed(id, "first failure".into(), Some(Utc::now()))
+            .await
+            .unwrap();
+        let r = store.fetch(id).await.unwrap().unwrap();
+        assert_eq!(r.status, JobStatus::Retrying);
+        // Pull again, fail terminally.
+        store.pull_next(vec!["default".into()]).await.unwrap();
+        store.mark_failed(id, "fatal".into(), None).await.unwrap();
+        let r = store.fetch(id).await.unwrap().unwrap();
+        assert_eq!(r.status, JobStatus::Dead);
+    }
+
+    #[tokio::test]
+    async fn sqlite_plugin_auto_migrate_runs_at_start() {
+        let mut runtime = Runtime::builder()
+            .with_plugin(SqliteJobStorePlugin::in_memory().with_auto_migrate())
+            .build()
+            .expect("runtime builds");
+        runtime.start().await.expect("migration succeeds at start");
+        // After start, the JobStore capability is usable.
+        let store = runtime.context().capability::<dyn JobStore>().unwrap();
+        let id = store
+            .enqueue(NewJob {
+                name: JobName::new("sqlite_auto"),
+                payload: serde_json::json!({}),
+                queue: "default".into(),
+                max_attempts: 1,
+                scheduled_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        let r = store.fetch(id).await.unwrap().unwrap();
+        assert_eq!(r.status, JobStatus::Pending);
         runtime.shutdown_gracefully().await;
     }
 }

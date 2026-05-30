@@ -22,7 +22,12 @@ serde             = { workspace = true }
 serde_json        = { workspace = true }
 tokio             = { workspace = true }
 tracing           = { workspace = true }
-chrono            = { workspace = true }
+chrono            = { workspace = true, features = ["serde"] }
+sqlx              = { workspace = true, features = ["sqlite", "chrono"], optional = true }
+
+[features]
+default = ["sqlite"]
+sqlite  = ["dep:sqlx"]
 
 [dev-dependencies]
 tokio-test        = { workspace = true }
