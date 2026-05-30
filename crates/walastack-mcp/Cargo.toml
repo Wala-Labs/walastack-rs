@@ -1,0 +1,29 @@
+[package]
+name        = "walastack-mcp"
+description = "Model Context Protocol (MCP) integration for WalaStack. Capability-based registry / client / transport, stdio transport (Iteration 1), and composition with the SecretsProvider capability. Iteration 1 Sub-batch A — foundation types + in-memory provider; stdio + JSON-RPC ship in Sub-batch B."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+documentation.workspace = true
+authors.workspace      = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lints]
+workspace = true
+
+[dependencies]
+walastack-runtime = { workspace = true }
+walastack-auth    = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+tokio             = { workspace = true }
+tracing           = { workspace = true }
+chrono            = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tokio-test        = { workspace = true }

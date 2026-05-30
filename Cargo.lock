@@ -2476,6 +2476,7 @@ dependencies = [
  "walastack-jobs",
  "walastack-llm",
  "walastack-macros",
+ "walastack-mcp",
  "walastack-openapi",
  "walastack-router",
  "walastack-runtime",
@@ -2585,6 +2586,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "walastack-mcp"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "walastack-auth",
+ "walastack-runtime",
 ]
 
 [[package]]

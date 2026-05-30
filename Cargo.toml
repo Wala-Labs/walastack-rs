@@ -21,6 +21,7 @@ members  = [
   "crates/walastack-auth",
   "crates/walastack-openapi",
   "crates/walastack-jobs",
+  "crates/walastack-mcp",
 ]
 
 [workspace.package]
@@ -100,6 +101,7 @@ walastack-llm      = { path = "crates/walastack-llm",      version = "0.1.0" }
 walastack-auth     = { path = "crates/walastack-auth",     version = "0.1.0" }
 walastack-openapi  = { path = "crates/walastack-openapi",  version = "0.1.0" }
 walastack-jobs     = { path = "crates/walastack-jobs",     version = "0.1.0" }
+walastack-mcp      = { path = "crates/walastack-mcp",      version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_code                   = "forbid"

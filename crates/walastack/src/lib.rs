@@ -90,6 +90,7 @@ pub mod prelude {
         pub use walastack_db::prelude::*;
         pub use walastack_jobs::prelude::*;
         pub use walastack_llm::prelude::*;
+        pub use walastack_mcp::prelude::*;
         pub use walastack_openapi::prelude::*;
     }
 }
