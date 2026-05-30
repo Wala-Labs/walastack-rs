@@ -206,10 +206,22 @@ pub enum Error {
     #[error("invalid address: {0}")]
     InvalidAddress(String),
 
+    /// A kernel-level failure from `walastack-runtime`. Used to bridge
+    /// `RuntimeError` into the user-facing `walastack::Result<T>` flow
+    /// without manual stringification.
+    #[error("runtime error: {0}")]
+    Runtime(String),
+
     /// An ad-hoc error with a free-form message — escape hatch for early
     /// development. Specific variants will replace these over time.
     #[error("{0}")]
     Custom(String),
+}
+
+impl From<walastack_runtime::RuntimeError> for Error {
+    fn from(err: walastack_runtime::RuntimeError) -> Self {
+        Self::Runtime(err.to_string())
+    }
 }
 
 /// A specialized [`Result`](std::result::Result) for WalaStack operations.

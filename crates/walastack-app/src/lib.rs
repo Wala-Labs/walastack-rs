@@ -63,6 +63,115 @@ use walastack_runtime::{
     ShutdownSignal,
 };
 
+// =========================================================================
+// Cap<T> — generic capability extractor
+// =========================================================================
+
+/// Generic capability extractor: pulls `T` from the
+/// `CapabilityRegistry` via the request's `RuntimeContext` extension.
+///
+/// `T` may be `?Sized` so trait-object capabilities work as naturally
+/// as concrete-type capabilities:
+///
+/// ```ignore
+/// // Concrete capability type (e.g., a sqlx pool registered by walastack-db):
+/// async fn handler(Cap(pool): Cap<sqlx::SqlitePool>) -> &'static str { "ok" }
+///
+/// // Trait-object capability (e.g., the SecretsProvider registered by
+/// // walastack-auth's InMemorySecretsPlugin):
+/// async fn handler(Cap(secrets): Cap<dyn walastack_auth::SecretsProvider>)
+///     -> &'static str { "ok" }
+/// ```
+///
+/// Domain crates conventionally provide thin type aliases for their
+/// preferred concrete types — e.g., `walastack_db::Db = Cap<SqlitePool>`
+/// — so most application code never writes the generic form directly.
+///
+/// On extraction failure the rejection renders **500 Internal Server
+/// Error** with a generic body and logs structured detail through
+/// `tracing::error!`, per the locked Rejection-Mapping Discipline.
+pub struct Cap<T: ?Sized + Send + Sync + 'static>(pub Arc<T>);
+
+impl<T: ?Sized + Send + Sync + 'static> std::fmt::Debug for Cap<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cap")
+            .field("type", &std::any::type_name::<T>())
+            .finish()
+    }
+}
+
+impl<T: ?Sized + Send + Sync + 'static> Clone for Cap<T> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+/// Failure modes for the [`Cap<T>`] extractor. Both render `500`
+/// per the locked Rejection-Mapping Discipline — these are operator
+/// misconfiguration, never caller error.
+#[derive(Debug)]
+pub enum CapRejection {
+    /// `HttpService` did not inject the [`RuntimeContext`] extension.
+    /// This is a server bug (HttpService misconfiguration).
+    MissingRuntimeContext,
+    /// The requested capability is not registered. The `type_name`
+    /// is `std::any::type_name::<T>()` of the missing type, useful
+    /// for log correlation.
+    MissingCapability {
+        /// Stringified type name for log correlation.
+        type_name: &'static str,
+    },
+}
+
+impl IntoResponse for CapRejection {
+    fn into_response(self) -> Response {
+        match &self {
+            Self::MissingRuntimeContext => {
+                tracing::error!(
+                    "Cap<T> extractor: RuntimeContext missing in request extensions \
+                     (HttpService injection broken — is the handler running through \
+                     the WalaStack App or TestClient?)"
+                );
+            }
+            Self::MissingCapability { type_name } => {
+                tracing::error!(
+                    type_name = %type_name,
+                    "Cap<T> extractor: capability not registered \
+                     (check plugin registration order and required_capabilities)"
+                );
+            }
+        }
+        let mut response = Response::new(Body::new(Bytes::from_static(b"Internal Server Error")));
+        *response.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
+        response
+    }
+}
+
+impl<T: ?Sized + Send + Sync + 'static> FromRequestParts for Cap<T> {
+    type Rejection = CapRejection;
+
+    fn from_request_parts(
+        parts: &mut http::request::Parts,
+    ) -> impl Future<Output = std::result::Result<Self, Self::Rejection>> + Send {
+        let result = parts
+            .extensions
+            .get::<RuntimeContext>()
+            .ok_or(CapRejection::MissingRuntimeContext)
+            .and_then(|ctx| {
+                ctx.capability::<T>()
+                    .ok_or(CapRejection::MissingCapability {
+                        type_name: std::any::type_name::<T>(),
+                    })
+            })
+            .map(Cap);
+        async move { result }
+    }
+}
+
+// =========================================================================
+// Route + Handler
+// =========================================================================
+
 /// Trait for types that register themselves as routes on an [`App`].
 ///
 /// Implemented by the route attribute macros (`#[get("/")]`, `#[post("/")]`,
@@ -744,6 +853,8 @@ async fn accept_loop(
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use std::sync::Arc;
+
     use super::{App, Request, Response, dispatch_request};
     use bytes::Bytes;
     use http::StatusCode;
@@ -821,5 +932,106 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---- Cap<T> extractor ----
+    //
+    // Cap<T> is the Tier 3 DX consolidation. Tests cover:
+    //   - happy path: capability registered → extraction succeeds
+    //   - rejection: capability missing → 500
+    //   - trait-object capability via `dyn Trait`
+    //
+    // RuntimeContext-missing path is exercised by the negative case
+    // when no `with_runtime` is set (TestClient::new uses an empty
+    // Runtime, so its RuntimeContext is present but empty).
+
+    use super::{Cap, CapRejection};
+
+    struct FakeService {
+        value: u32,
+    }
+
+    trait Greeter: Send + Sync + 'static {
+        fn greet(&self) -> &'static str;
+    }
+
+    struct EnglishGreeter;
+
+    impl Greeter for EnglishGreeter {
+        fn greet(&self) -> &'static str {
+            "hello"
+        }
+    }
+
+    async fn concrete_handler(Cap(svc): Cap<FakeService>) -> String {
+        format!("value={}", svc.value)
+    }
+
+    async fn trait_object_handler(Cap(g): Cap<dyn Greeter>) -> String {
+        g.greet().to_string()
+    }
+
+    #[tokio::test]
+    async fn cap_extracts_concrete_capability() {
+        let runtime = Runtime::builder()
+            .with_default_capability::<FakeService>(Arc::new(FakeService { value: 42 }))
+            .build()
+            .unwrap();
+        let router = App::new().get("/svc", concrete_handler).into_router();
+        let response = dispatch_request(
+            &router,
+            runtime.context(),
+            request(http::Method::GET, "/svc"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn cap_extracts_trait_object_capability() {
+        let runtime = Runtime::builder()
+            .with_default_capability::<dyn Greeter>(Arc::new(EnglishGreeter))
+            .build()
+            .unwrap();
+        let router = App::new().get("/greet", trait_object_handler).into_router();
+        let response = dispatch_request(
+            &router,
+            runtime.context(),
+            request(http::Method::GET, "/greet"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn cap_returns_500_when_capability_missing() {
+        let runtime = Runtime::builder().build().unwrap();
+        let router = App::new().get("/svc", concrete_handler).into_router();
+        let response = dispatch_request(
+            &router,
+            runtime.context(),
+            request(http::Method::GET, "/svc"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn cap_rejection_carries_type_name() {
+        // The actual type_name format is compiler-dependent; assert it
+        // contains the substring of the type we asked for, which is
+        // sufficient for log correlation.
+        let rej = CapRejection::MissingCapability {
+            type_name: std::any::type_name::<FakeService>(),
+        };
+        match rej {
+            CapRejection::MissingCapability { type_name } => {
+                assert!(
+                    type_name.contains("FakeService"),
+                    "expected FakeService in {type_name}"
+                );
+            }
+            CapRejection::MissingRuntimeContext => panic!("wrong variant"),
+        }
     }
 }

@@ -54,8 +54,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![allow(clippy::doc_markdown)]
 
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use walastack::prelude::*;
@@ -66,54 +64,17 @@ use walastack_openapi::{OpenApiConfig, OpenApiPlugin, RouteSpec, Schema, ToSchem
 use walastack_runtime::RuntimeContext;
 
 // =========================================================================
-// Db extractor (same hand-written pattern as hello-auth-db)
+// Db type alias
 // =========================================================================
 //
-// TIER 2 OBSERVATION: copied verbatim from hello-auth-db.
-// Classification: STILL PAINFUL AFTER DOCUMENTATION. The guides explain
-// where this lives and why; they don't reduce the boilerplate. Strong
-// evidence for the Tier 3 `Cap<T>` API addition.
+// TIER 3.1 RESULT: the previous hand-written `Db` extractor
+// (~40 lines, copied verbatim across two examples in Tier 2) is gone.
+// The generic `Cap<T>` extractor from `walastack` (re-exported through
+// `walastack::prelude::*`) handles both concrete and trait-object
+// capabilities; this short alias keeps the existing destructuring
+// pattern intact: `Cap(pool): Db`.
 
-struct Db(pub Arc<SqlitePool>);
-
-enum DbRejection {
-    MissingRuntimeContext,
-    MissingDatabase,
-}
-
-impl IntoResponse for DbRejection {
-    fn into_response(self) -> Response {
-        let mut response = Response::new(Body::new(Bytes::from_static(b"Internal Server Error")));
-        *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-        tracing::error!(
-            error = match self {
-                Self::MissingRuntimeContext => "RuntimeContext missing in request extensions",
-                Self::MissingDatabase => "SqlitePool capability not registered",
-            },
-            "Db extractor failed"
-        );
-        response
-    }
-}
-
-impl FromRequestParts for Db {
-    type Rejection = DbRejection;
-
-    fn from_request_parts(
-        parts: &mut http::request::Parts,
-    ) -> impl std::future::Future<Output = std::result::Result<Self, Self::Rejection>> + Send {
-        let result = parts
-            .extensions
-            .get::<RuntimeContext>()
-            .ok_or(DbRejection::MissingRuntimeContext)
-            .and_then(|ctx| {
-                ctx.capability::<SqlitePool>()
-                    .ok_or(DbRejection::MissingDatabase)
-            })
-            .map(Db);
-        async move { result }
-    }
-}
+type Db = Cap<SqlitePool>;
 
 // =========================================================================
 // Domain types
@@ -223,7 +184,7 @@ async fn health() -> &'static str {
 }
 
 async fn signup(
-    Db(pool): Db,
+    Cap(pool): Db,
     Json(creds): Json<AuthCredentials>,
 ) -> std::result::Result<Json<TokenResponse>, HandlerError> {
     if creds.email.is_empty() || creds.password.is_empty() {
@@ -256,7 +217,7 @@ async fn signup(
 }
 
 async fn login(
-    Db(pool): Db,
+    Cap(pool): Db,
     Json(creds): Json<AuthCredentials>,
 ) -> std::result::Result<Json<TokenResponse>, HandlerError> {
     let row: Option<(i64, String)> =
@@ -279,7 +240,10 @@ async fn login(
     }))
 }
 
-async fn me(Db(pool): Db, Auth(claims): Auth) -> std::result::Result<Json<UserInfo>, HandlerError> {
+async fn me(
+    Cap(pool): Db,
+    Auth(claims): Auth,
+) -> std::result::Result<Json<UserInfo>, HandlerError> {
     let id: i64 = claims.sub.parse().map_err(|_| HandlerError::Unauthorized)?;
     let row: Option<(i64, String)> = sqlx::query_as("SELECT id, email FROM users WHERE id = ?")
         .bind(id)
@@ -410,13 +374,10 @@ async fn main() -> walastack::Result<()> {
         .with_plugin(AuthPlugin::new().with_jwt(JWT_KEY_NAME, JwtConfig::new(JWT_ISSUER)))
         .with_plugin(OpenApiPlugin::new(openapi_config))
         .with(build_app().into_http_service("127.0.0.1:3000")?)
-        .build()
-        .map_err(|e| walastack::Error::Custom(e.to_string()))?;
+        .build()?;
     set_runtime_context(runtime.context().clone());
-    runtime
-        .run()
-        .await
-        .map_err(|e| walastack::Error::Custom(e.to_string()))
+    runtime.run().await?;
+    Ok(())
 }
 
 // =========================================================================

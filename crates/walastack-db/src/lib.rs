@@ -157,6 +157,30 @@ pub mod sqlite {
 }
 
 // ---------------------------------------------------------------------------
+// Prelude
+// ---------------------------------------------------------------------------
+
+/// Common imports for applications using `walastack-db`.
+///
+/// ```rust
+/// use walastack_db::prelude::*;
+/// ```
+///
+/// Re-exports:
+/// - [`Database`] capability trait
+/// - [`sqlite::SqlitePlugin`] (when the `sqlite` feature is enabled)
+/// - [`postgres::PostgresPlugin`] (when the `postgres` feature is enabled)
+pub mod prelude {
+    pub use crate::Database;
+
+    #[cfg(feature = "sqlite")]
+    pub use crate::sqlite::SqlitePlugin;
+
+    #[cfg(feature = "postgres")]
+    pub use crate::postgres::PostgresPlugin;
+}
+
+// ---------------------------------------------------------------------------
 // postgres
 // ---------------------------------------------------------------------------
 

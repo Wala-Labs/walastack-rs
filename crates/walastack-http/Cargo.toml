@@ -17,12 +17,13 @@ categories.workspace   = true
 workspace = true
 
 [dependencies]
-bytes            = { workspace = true }
-http             = { workspace = true }
-http-body        = { workspace = true }
-http-body-util   = { workspace = true }
-serde            = { workspace = true }
-serde_json       = { workspace = true }
-serde_urlencoded = { workspace = true }
-thiserror        = { workspace = true }
-tracing          = { workspace = true }
+bytes             = { workspace = true }
+http              = { workspace = true }
+http-body         = { workspace = true }
+http-body-util    = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+serde_urlencoded  = { workspace = true }
+thiserror         = { workspace = true }
+tracing           = { workspace = true }
+walastack-runtime = { workspace = true }

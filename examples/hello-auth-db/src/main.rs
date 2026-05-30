@@ -64,8 +64,6 @@
 // them in prose hurts readability.
 #![allow(clippy::doc_markdown)]
 
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use walastack::prelude::*;
@@ -75,55 +73,19 @@ use walastack_http::Body;
 use walastack_runtime::RuntimeContext;
 
 // =========================================================================
-// Db extractor
+// Db type alias
 // =========================================================================
 //
-// One-off extractor that pulls the SqlitePool capability from the
-// request's RuntimeContext extension. In a future iteration this
-// pattern should live in walastack-db (or be subsumed by a generic
-// `Cap<C>` extractor in walastack-http / walastack-app) — see the
-// "DX friction observations" comment block at the end of this file.
+// As of Tier 3.1, the generic `Cap<T>` extractor in walastack-app
+// subsumes the hand-written `Db` shape. A short type alias keeps the
+// existing `Db(pool)` destructuring at handler sites:
+//
+//     async fn signup(Cap(pool): Db, ...) { ... }
+//
+// In a future iteration walastack-db itself can ship this alias so
+// every consumer benefits without redefining it locally.
 
-struct Db(pub Arc<SqlitePool>);
-
-enum DbRejection {
-    MissingRuntimeContext,
-    MissingDatabase,
-}
-
-impl IntoResponse for DbRejection {
-    fn into_response(self) -> Response {
-        let mut response = Response::new(Body::new(Bytes::from_static(b"Internal Server Error")));
-        *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-        tracing::error!(
-            error = match self {
-                Self::MissingRuntimeContext => "RuntimeContext missing in request extensions",
-                Self::MissingDatabase => "SqlitePool capability not registered",
-            },
-            "Db extractor failed"
-        );
-        response
-    }
-}
-
-impl FromRequestParts for Db {
-    type Rejection = DbRejection;
-
-    fn from_request_parts(
-        parts: &mut http::request::Parts,
-    ) -> impl std::future::Future<Output = std::result::Result<Self, Self::Rejection>> + Send {
-        let result = parts
-            .extensions
-            .get::<RuntimeContext>()
-            .ok_or(DbRejection::MissingRuntimeContext)
-            .and_then(|ctx| {
-                ctx.capability::<SqlitePool>()
-                    .ok_or(DbRejection::MissingDatabase)
-            })
-            .map(Db);
-        async move { result }
-    }
-}
+type Db = Cap<SqlitePool>;
 
 // =========================================================================
 // Domain types
@@ -185,7 +147,7 @@ async fn health() -> &'static str {
 
 #[post("/signup")]
 async fn signup(
-    Db(pool): Db,
+    Cap(pool): Db,
     Json(creds): Json<AuthCredentials>,
 ) -> std::result::Result<Json<TokenResponse>, HandlerError> {
     if creds.email.is_empty() || creds.password.is_empty() {
@@ -220,7 +182,7 @@ async fn signup(
 
 #[post("/login")]
 async fn login(
-    Db(pool): Db,
+    Cap(pool): Db,
     Json(creds): Json<AuthCredentials>,
 ) -> std::result::Result<Json<TokenResponse>, HandlerError> {
     let row: Option<(i64, String)> =
@@ -244,7 +206,10 @@ async fn login(
 }
 
 #[get("/me")]
-async fn me(Db(pool): Db, Auth(claims): Auth) -> std::result::Result<Json<UserInfo>, HandlerError> {
+async fn me(
+    Cap(pool): Db,
+    Auth(claims): Auth,
+) -> std::result::Result<Json<UserInfo>, HandlerError> {
     let id: i64 = claims.sub.parse().map_err(|_| HandlerError::Unauthorized)?;
     let row: Option<(i64, String)> = sqlx::query_as("SELECT id, email FROM users WHERE id = ?")
         .bind(id)
@@ -359,13 +324,10 @@ async fn main() -> walastack::Result<()> {
                 .route(me)
                 .into_http_service("127.0.0.1:3000")?,
         )
-        .build()
-        .map_err(|e| walastack::Error::Custom(e.to_string()))?;
+        .build()?;
     set_runtime_context(runtime.context().clone());
-    runtime
-        .run()
-        .await
-        .map_err(|e| walastack::Error::Custom(e.to_string()))
+    runtime.run().await?;
+    Ok(())
 }
 
 // =========================================================================

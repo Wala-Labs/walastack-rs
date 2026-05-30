@@ -451,6 +451,26 @@ pub mod ollama {
 }
 
 // =========================================================================
+// Prelude
+// =========================================================================
+
+/// Common imports for applications using `walastack-llm`.
+///
+/// ```rust
+/// use walastack_llm::prelude::*;
+/// ```
+///
+/// Re-exports the capability trait + request/response types + the
+/// two built-in provider plugins (`openai::OpenAiPlugin` and
+/// `ollama::OllamaPlugin`).
+pub mod prelude {
+    pub use crate::{
+        BoxedLlmFuture, CompletionRequest, CompletionResponse, Llm, LlmError, ollama::OllamaPlugin,
+        openai::OpenAiPlugin,
+    };
+}
+
+// =========================================================================
 // Tests
 // =========================================================================
 

@@ -864,6 +864,27 @@ impl Plugin for OpenApiPlugin {
 }
 
 // =========================================================================
+// Prelude
+// =========================================================================
+
+/// Common imports for applications using `walastack-openapi`.
+///
+/// ```rust
+/// use walastack_openapi::prelude::*;
+/// ```
+///
+/// Re-exports the spec model + plugin types. Document-rendering
+/// internals (`render_document`, `normalize_path`) and the
+/// component-spec types (`ServerSpec`, `ContactSpec`, etc.) remain
+/// in the crate root for advanced users.
+pub mod prelude {
+    pub use crate::{
+        Method, OpenApiConfig, OpenApiPlugin, ParameterLocation, ParameterSpec, RouteSpec, Schema,
+        SchemaType, ToSchema,
+    };
+}
+
+// =========================================================================
 // Tests
 // =========================================================================
 

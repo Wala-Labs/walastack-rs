@@ -23,3 +23,22 @@ walastack-http    = { workspace = true }
 walastack-macros  = { workspace = true }
 walastack-router  = { workspace = true }
 walastack-runtime = { workspace = true }
+# Optional ecosystem crates re-exported by the `full` prelude.
+walastack-auth    = { workspace = true, optional = true }
+walastack-db      = { workspace = true, optional = true }
+walastack-jobs    = { workspace = true, optional = true }
+walastack-llm     = { workspace = true, optional = true }
+walastack-openapi = { workspace = true, optional = true }
+
+[features]
+default = []
+# Enables `walastack::prelude::full` — re-exports the full ecosystem
+# (auth + db + jobs + llm + openapi). Increases compile time; opt in
+# when you want one-import application bootstrapping.
+full = [
+    "dep:walastack-auth",
+    "dep:walastack-db",
+    "dep:walastack-jobs",
+    "dep:walastack-llm",
+    "dep:walastack-openapi",
+]

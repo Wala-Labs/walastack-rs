@@ -1103,6 +1103,34 @@ pub async fn enqueue<J: Job>(ctx: &RuntimeContext, job: J) -> Result<JobId, Jobs
 pub mod sqlite;
 
 // =========================================================================
+// Prelude
+// =========================================================================
+
+/// Common imports for applications using `walastack-jobs`.
+///
+/// ```rust
+/// use walastack_jobs::prelude::*;
+/// ```
+///
+/// Re-exports the trait + plugin + lifecycle event types that the
+/// typical application code needs. Lower-level types (`JobName`,
+/// `JobsDispatcher`, `BoxedJobStoreFuture`, etc.) remain in the crate
+/// root for advanced users.
+pub mod prelude {
+    pub use crate::{
+        InMemoryJobStorePlugin, Job, JobContext, JobMetadata, JobStore, JobsConfig, JobsError,
+        JobsPlugin, enqueue,
+    };
+
+    // Lifecycle events — applications that subscribe to job state
+    // changes need these by name.
+    pub use crate::{JobCompleted, JobDead, JobEnqueued, JobFailed, JobRetrying, JobStarted};
+
+    #[cfg(feature = "sqlite")]
+    pub use crate::sqlite::SqliteJobStorePlugin;
+}
+
+// =========================================================================
 // Tests
 // =========================================================================
 

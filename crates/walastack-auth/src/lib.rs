@@ -785,6 +785,27 @@ impl fmt::Display for AuthError {
 impl std::error::Error for AuthError {}
 
 // =========================================================================
+// Prelude
+// =========================================================================
+
+/// Common imports for applications using `walastack-auth`.
+///
+/// ```rust
+/// use walastack_auth::prelude::*;
+/// ```
+///
+/// Re-exports the public surface for the common case: `AuthPlugin`
+/// plus the `Auth` extractor with an in-memory secrets / sessions
+/// provider for dev / sovereign single-node.
+pub mod prelude {
+    pub use crate::{
+        Auth, AuthError, AuthPlugin, AuthRejection, Claims, InMemorySecretsPlugin,
+        InMemorySessionStorePlugin, JwtCodec, JwtConfig, JwtSettings, SecretsProvider, Session,
+        SessionStore,
+    };
+}
+
+// =========================================================================
 // Tests
 // =========================================================================
 

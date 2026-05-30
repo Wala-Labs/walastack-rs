@@ -47,7 +47,37 @@ impl ResourceRegistry {
     ///
     /// If a resource of the same type was already registered, it is replaced
     /// and returned to the caller.
+    ///
+    /// # Common gotcha — do NOT pre-wrap in `Arc`
+    ///
+    /// `insert` wraps the value in an `Arc<T>` for you. Passing an
+    /// `Arc<T>` here registers it under `TypeId::of::<Arc<T>>()`, which
+    /// downstream `get::<T>()` lookups will silently miss:
+    ///
+    /// ```ignore
+    /// // Wrong — registers Arc<Arc<MyConfig>>; get::<MyConfig>() returns None.
+    /// registry.insert(Arc::new(MyConfig::default()));
+    ///
+    /// // Right — registers Arc<MyConfig>; get::<MyConfig>() returns Some(_).
+    /// registry.insert(MyConfig::default());
+    /// ```
+    ///
+    /// If you genuinely need to register an existing `Arc<T>`, use
+    /// [`insert_arc`](Self::insert_arc) instead, which is explicit
+    /// about the wrap semantics.
+    ///
+    /// A `debug_assert!` in debug builds catches the common mistake of
+    /// passing an `Arc<T>` to `insert` when the underlying type already
+    /// implements an Arc-like shape — release builds are unchanged for
+    /// performance.
     pub fn insert<T: Send + Sync + 'static>(&mut self, value: T) -> Option<Arc<T>> {
+        debug_assert!(
+            !std::any::type_name::<T>().starts_with("alloc::sync::Arc<"),
+            "ResourceRegistry::insert({}) — you are double-Arc-ing. Pass the raw \
+             value (insert wraps it) or use insert_arc to keep your existing Arc. \
+             See the `insert` doc comment for the right pattern.",
+            std::any::type_name::<T>()
+        );
         self.insert_arc(Arc::new(value))
     }
 

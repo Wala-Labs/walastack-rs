@@ -2470,8 +2470,13 @@ version = "0.1.0"
 dependencies = [
  "tokio",
  "walastack-app",
+ "walastack-auth",
+ "walastack-db",
  "walastack-http",
+ "walastack-jobs",
+ "walastack-llm",
  "walastack-macros",
+ "walastack-openapi",
  "walastack-router",
  "walastack-runtime",
 ]
@@ -2544,6 +2549,7 @@ dependencies = [
  "serde_urlencoded",
  "thiserror",
  "tracing",
+ "walastack-runtime",
 ]
 
 [[package]]
