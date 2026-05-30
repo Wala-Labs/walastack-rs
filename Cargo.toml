@@ -12,6 +12,8 @@ members  = [
   "crates/walastack-test",
   "examples/hello-world",
   "examples/hello-auth-db",
+  "examples/hello-auth-db-openapi",
+  "examples/hello-jobs-only",
   "xtask",
   "crates/walastack-db",
   "crates/walastack-observability",
