@@ -27,3 +27,11 @@ chrono            = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 tokio-test        = { workspace = true }
+
+# Fake MCP server used as a stdio test fixture. Compiled as a regular
+# `[[bin]]` so the integration test can resolve its path via
+# `env!("CARGO_BIN_EXE_walastack-mcp-fake-server")`. The binary is not
+# part of the public crate surface and is `pub use`-d nowhere.
+[[bin]]
+name = "walastack-mcp-fake-server"
+path = "src/bin/fake_mcp_server.rs"

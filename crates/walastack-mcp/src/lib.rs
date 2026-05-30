@@ -68,6 +68,20 @@
 // "MCP", "JSON-RPC", "OAuth", "WebSocket" are domain names, not code
 // identifiers.
 #![allow(clippy::doc_markdown)]
+// MutexGuard scoping is intentional across `stdio.rs` write paths
+// (same pattern as walastack-jobs); explicit `drop(...)` noise doesn't
+// help readability.
+#![allow(
+    clippy::significant_drop_tightening,
+    clippy::significant_drop_in_scrutinee
+)]
+// Reader/writer loops + capability methods have natural error-handling
+// branches; splitting further fragments the lifecycle.
+#![allow(clippy::cognitive_complexity)]
+// StdioConnection::open does subprocess spawn + reader-task setup +
+// stderr drain + handshake in one place by design; splitting fragments
+// the protocol initialization story.
+#![allow(clippy::too_many_lines)]
 
 pub mod capabilities;
 pub mod config;
@@ -75,8 +89,11 @@ pub mod descriptors;
 pub mod errors;
 pub mod events;
 pub mod inmemory;
+pub mod jsonrpc;
 pub mod plugin;
 pub mod prelude;
+pub mod service;
+pub mod stdio;
 
 // Top-level re-exports of the most-named types so first-time users can
 // `use walastack_mcp::{...}` without descending into modules.

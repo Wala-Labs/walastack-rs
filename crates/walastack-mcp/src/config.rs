@@ -65,8 +65,8 @@ impl McpConfig {
 #[derive(Clone, Debug)]
 pub struct McpServerSpec {
     /// Identifier callers use to refer to this server in
-    /// [`McpRegistry`](crate::McpRegistry) and
-    /// [`McpClient`](crate::McpClient) calls.
+    /// [`McpRegistry`](crate::capabilities::McpRegistry) and
+    /// [`McpClient`](crate::capabilities::McpClient) calls.
     pub id: ServerId,
     /// How to connect to the server.
     pub transport: TransportSpec,

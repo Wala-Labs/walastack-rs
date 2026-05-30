@@ -1,5 +1,5 @@
-//! Typed descriptors flowing through the [`McpRegistry`](crate::McpRegistry)
-//! and [`McpClient`](crate::McpClient) capability methods.
+//! Typed descriptors flowing through the [`McpRegistry`](crate::capabilities::McpRegistry)
+//! and [`McpClient`](crate::capabilities::McpClient) capability methods.
 //!
 //! These are **data, not capabilities** — they're the typed payloads
 //! that callers receive when discovering servers / tools / resources.
